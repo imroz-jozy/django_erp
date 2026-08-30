@@ -1,0 +1,49 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<div id="content-main">
+  <div class="module">
+    <table>
+      <caption>Reports</caption>
+      <tr>
+        <th scope="row"><a href="{% url 'admin:erp_ledger_index' %}">Ledger</a></th>
+        <td>Account-wise debit / credit running balance</td>
+      </tr>
+      <tr>
+        <th scope="row"><a href="{% url 'admin:erp_trial_balance' %}">Trial Balance</a></th>
+        <td>Ledger debit / credit totals</td>
+      </tr>
+      <tr>
+        <th scope="row"><a href="{% url 'admin:erp_profit_loss' %}">Profit &amp; Loss</a></th>
+        <td>Trading and profit &amp; loss account</td>
+      </tr>
+      <tr>
+        <th scope="row"><a href="{% url 'admin:erp_balance_sheet' %}">Balance Sheet</a></th>
+        <td>Assets, liabilities and capital</td>
+      </tr>
+      <tr>
+        <th scope="row"><a href="{% url 'admin:erp_sales_register' %}">Sales Register</a></th>
+        <td>Sale invoices with net amount</td>
+      </tr>
+      <tr>
+        <th scope="row"><a href="{% url 'admin:erp_purchase_register' %}">Purchase Register</a></th>
+        <td>Purchase invoices with net amount</td>
+      </tr>
+      <tr>
+        <th scope="row"><a href="{% url 'admin:erp_payment_register' %}">Payment Register</a></th>
+        <td>Payments from cash / bank</td>
+      </tr>
+      <tr>
+        <th scope="row"><a href="{% url 'admin:erp_receipt_register' %}">Receipt Register</a></th>
+        <td>Receipts into cash / bank</td>
+      </tr>
+      <tr>
+        <th scope="row"><a href="{% url 'admin:erp_stock_summary' %}">Stock Summary</a></th>
+        <td>Opening, inward, outward and closing</td>
+      </tr>
+    </table>
+  </div>
+  {% include "admin/app_list.html" with app_list=app_list show_changelinks=True %}
+</div>
+{% endblock %}

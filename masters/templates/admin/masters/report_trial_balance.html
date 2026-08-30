@@ -1,0 +1,32 @@
+{% extends "admin/masters/report_base.html" %}
+
+{% block report_body %}
+<table class="erp-report">
+  <thead>
+    <tr>
+      <th>Account</th>
+      <th>Group</th>
+      <th class="num">Debit</th>
+      <th class="num">Credit</th>
+      <th class="num">Balance</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td><a href="{% url 'admin:erp_ledger' row.account.id %}?from={{ date_from|date:'Y-m-d' }}&amp;to={{ date_to|date:'Y-m-d' }}">{{ row.account.account_name }}</a></td>
+      <td>{{ row.group.name }}</td>
+      <td class="num">{{ row.debit }}</td>
+      <td class="num">{{ row.credit }}</td>
+      <td class="num">{{ row.display }} {{ row.dr_cr }}</td>
+    </tr>
+    {% endfor %}
+    <tr class="total">
+      <td colspan="2">Total</td>
+      <td class="num">{{ total_dr }}</td>
+      <td class="num">{{ total_cr }}</td>
+      <td></td>
+    </tr>
+  </tbody>
+</table>
+{% endblock %}

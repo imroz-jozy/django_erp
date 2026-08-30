@@ -1,0 +1,38 @@
+{% extends "admin/masters/report_base.html" %}
+
+{% block report_body %}
+<table class="erp-report">
+  <thead>
+    <tr>
+      <th>Date</th>
+      <th>Invoice</th>
+      <th>Type</th>
+      <th>{{ party_label }}</th>
+      <th class="num">Basic</th>
+      <th class="num">Tax</th>
+      <th class="num">Sundry</th>
+      <th class="num">Net</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.voucher.date }}</td>
+      <td>{{ row.voucher.invoice_no }}</td>
+      <td>{% firstof row.voucher.sale_type row.voucher.purchase_type %}</td>
+      <td>{{ row.voucher.account }}</td>
+      <td class="num">{{ row.totals.item_basic_amount }}</td>
+      <td class="num">{{ row.totals.tax_amount }}</td>
+      <td class="num">{{ row.totals.sundry_amount }}</td>
+      <td class="num">{{ row.totals.net_amount }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="8">No vouchers in this period.</td></tr>
+    {% endfor %}
+    <tr class="total">
+      <td colspan="7">Total</td>
+      <td class="num">{{ total }}</td>
+    </tr>
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,38 @@
+{% extends "admin/masters/report_base.html" %}
+
+{% block report_body %}
+<p>As on {{ date_to }}</p>
+<div class="erp-split">
+  <table class="erp-report">
+    <thead>
+      <tr><th>Liabilities</th><th class="num">Amount</th></tr>
+    </thead>
+    <tbody>
+      {% for group in liabilities %}
+      <tr class="group"><td>{{ group.name }}</td><td class="num">{{ group.total }}</td></tr>
+      {% for line in group.lines %}
+      <tr><td style="padding-left:20px">{{ line.name }}</td><td class="num">{{ line.amount }}</td></tr>
+      {% endfor %}
+      {% endfor %}
+      <tr class="total"><td>Total</td><td class="num">{{ liability_total }}</td></tr>
+    </tbody>
+  </table>
+  <table class="erp-report">
+    <thead>
+      <tr><th>Assets</th><th class="num">Amount</th></tr>
+    </thead>
+    <tbody>
+      {% for group in assets %}
+      <tr class="group"><td>{{ group.name }}</td><td class="num">{{ group.total }}</td></tr>
+      {% for line in group.lines %}
+      <tr><td style="padding-left:20px">{{ line.name }}</td><td class="num">{{ line.amount }}</td></tr>
+      {% endfor %}
+      {% endfor %}
+      <tr class="total"><td>Total</td><td class="num">{{ asset_total }}</td></tr>
+    </tbody>
+  </table>
+</div>
+{% if difference %}
+<p>Difference in books: {{ difference }}</p>
+{% endif %}
+{% endblock %}

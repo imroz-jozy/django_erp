@@ -1,0 +1,45 @@
+{% extends "admin/masters/report_base.html" %}
+
+{% block report_body %}
+<table class="erp-report">
+  <thead>
+    <tr>
+      <th>Item</th>
+      <th class="num">Opening qty</th>
+      <th class="num">Opening value</th>
+      <th class="num">Purchase qty</th>
+      <th class="num">Sale qty</th>
+      <th class="num">Closing qty</th>
+      <th class="num">Avg Rate (WAR)</th>
+      <th class="num">Closing value</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.item.item_name }}</td>
+      <td class="num">{{ row.opening_qty }}</td>
+      <td class="num">{{ row.opening_value }}</td>
+      <td class="num">{{ row.purchase_qty }}</td>
+      <td class="num">{{ row.sale_qty }}</td>
+      <td class="num">{{ row.closing_qty }}</td>
+      <td class="num">{{ row.war }}</td>
+      <td class="num">{{ row.closing_value }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="8">No items.</td></tr>
+    {% endfor %}
+    <tr class="total">
+      <td>Total</td>
+      <td></td>
+      <td class="num">{{ opening_stock }}</td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td class="num">{{ closing_stock }}</td>
+    </tr>
+  </tbody>
+</table>
+{% endblock %}
+

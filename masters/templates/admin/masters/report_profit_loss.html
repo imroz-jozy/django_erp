@@ -1,0 +1,51 @@
+{% extends "admin/masters/report_base.html" %}
+
+{% block report_body %}
+<p>Period {{ date_from }} to {{ date_to }}</p>
+<div class="erp-split">
+  <table class="erp-report">
+    <thead>
+      <tr><th>Particulars</th><th class="num">Amount</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Opening Stock</td><td class="num">{{ opening_stock }}</td></tr>
+      <tr><td>Purchase</td><td class="num">{{ purchase_total }}</td></tr>
+      {% for row in purchases %}
+      <tr><td style="padding-left:20px">{{ row.account.account_name }}</td><td class="num">{{ row.display }}</td></tr>
+      {% endfor %}
+      <tr><td>Direct Expenses</td><td class="num">{{ direct_exp_total }}</td></tr>
+      {% for row in direct_exp %}
+      <tr><td style="padding-left:20px">{{ row.account.account_name }}</td><td class="num">{{ row.display }}</td></tr>
+      {% endfor %}
+      {% if gross_profit %}<tr><td>Gross Profit c/d</td><td class="num">{{ gross_profit }}</td></tr>{% endif %}
+      <tr class="total"><td>Total</td><td class="num">{{ left_total }}</td></tr>
+      {% if gross_profit %}<tr><td>Gross Profit b/d</td><td class="num">{{ gross_profit }}</td></tr>{% endif %}
+      <tr><td>Indirect Expenses</td><td class="num">{{ indirect_exp_total }}</td></tr>
+      {% for row in indirect_exp %}
+      <tr><td style="padding-left:20px">{{ row.account.account_name }}</td><td class="num">{{ row.display }}</td></tr>
+      {% endfor %}
+      {% if net_profit %}<tr><td>Net Profit</td><td class="num">{{ net_profit }}</td></tr>{% endif %}
+    </tbody>
+  </table>
+  <table class="erp-report">
+    <thead>
+      <tr><th>Particulars</th><th class="num">Amount</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Sales</td><td class="num">{{ sales_total }}</td></tr>
+      {% for row in sales %}
+      <tr><td style="padding-left:20px">{{ row.account.account_name }}</td><td class="num">{{ row.display }}</td></tr>
+      {% endfor %}
+      <tr><td>Closing Stock</td><td class="num">{{ closing_stock }}</td></tr>
+      {% if gross_loss %}<tr><td>Gross Loss c/d</td><td class="num">{{ gross_loss }}</td></tr>{% endif %}
+      <tr class="total"><td>Total</td><td class="num">{{ right_total }}</td></tr>
+      {% if gross_loss %}<tr><td>Gross Loss b/d</td><td class="num">{{ gross_loss }}</td></tr>{% endif %}
+      <tr><td>Indirect Income</td><td class="num">{{ indirect_income_total }}</td></tr>
+      {% for row in indirect_income %}
+      <tr><td style="padding-left:20px">{{ row.account.account_name }}</td><td class="num">{{ row.display }}</td></tr>
+      {% endfor %}
+      {% if net_loss %}<tr><td>Net Loss</td><td class="num">{{ net_loss }}</td></tr>{% endif %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

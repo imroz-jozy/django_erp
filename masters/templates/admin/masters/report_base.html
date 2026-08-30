@@ -1,0 +1,27 @@
+{% extends "admin/base_site.html" %}
+
+{% block extrahead %}
+{{ block.super }}
+<style>
+  .erp-filter { margin: 0 0 16px; padding: 8px 0; }
+  .erp-filter input[type="date"] { margin-right: 8px; }
+  .erp-report { width: 100%; border-collapse: collapse; }
+  .erp-report th, .erp-report td { padding: 6px 8px; border-bottom: 1px solid var(--border-color, #ddd); }
+  .erp-report .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .erp-report .total td { font-weight: 700; border-top: 2px solid currentColor; }
+  .erp-report .group { font-weight: 700; background: var(--darkened-bg, #f8f8f8); }
+  .erp-split { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  @media (max-width: 900px) { .erp-split { grid-template-columns: 1fr; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<form class="erp-filter" method="get">
+  <label>From <input type="date" name="from" value="{{ date_from|date:'Y-m-d' }}"></label>
+  <label>To <input type="date" name="to" value="{{ date_to|date:'Y-m-d' }}"></label>
+  {% block report_filters %}{% endblock %}
+  <button type="submit" class="button">Show</button>
+  <a href="{% url 'admin:index' %}" style="margin-left:12px;">Back to admin</a>
+</form>
+{% block report_body %}{% endblock %}
+{% endblock %}

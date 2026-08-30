@@ -1,0 +1,59 @@
+{% extends "admin/masters/report_base.html" %}
+
+{% block report_filters %}
+  <label>Account
+    <select name="account">
+      <option value="">Select account</option>
+      {% for acc in accounts %}
+      <option value="{{ acc.id }}"{% if data and data.account.id == acc.id %} selected{% endif %}>
+        {{ acc.account_name }} ({{ acc.account_group }})
+      </option>
+      {% endfor %}
+    </select>
+  </label>
+{% endblock %}
+
+{% block report_body %}
+{% if data %}
+<table class="erp-report">
+  <thead>
+    <tr>
+      <th>Date</th>
+      <th>Type</th>
+      <th>Voucher</th>
+      <th>Narration</th>
+      <th class="num">Debit</th>
+      <th class="num">Credit</th>
+      <th class="num">Balance</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td colspan="4">Opening</td>
+      <td class="num">{{ data.opening_dr }}</td>
+      <td class="num">{{ data.opening_cr }}</td>
+      <td class="num">{{ data.opening_balance }} {{ data.opening_dr_cr }}</td>
+    </tr>
+    {% for row in data.rows %}
+    <tr>
+      <td>{{ row.date }}</td>
+      <td>{{ row.vtype }}</td>
+      <td>{{ row.voucher_no }}</td>
+      <td>{{ row.narration }}</td>
+      <td class="num">{% if row.debit %}{{ row.debit }}{% endif %}</td>
+      <td class="num">{% if row.credit %}{{ row.credit }}{% endif %}</td>
+      <td class="num">{{ row.balance }} {{ row.dr_cr }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="7">No transactions in this period.</td></tr>
+    {% endfor %}
+    <tr class="total">
+      <td colspan="4">Closing</td>
+      <td class="num">{{ data.period_dr }}</td>
+      <td class="num">{{ data.period_cr }}</td>
+      <td class="num">{{ data.closing_balance }} {{ data.closing_dr_cr }}</td>
+    </tr>
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}
