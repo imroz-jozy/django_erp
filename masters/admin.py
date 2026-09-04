@@ -1,4 +1,7 @@
 from django.contrib import admin
+from django.core.exceptions import ValidationError
+from django import forms
+from django.forms.models import BaseInlineFormSet
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.template.response import TemplateResponse
@@ -10,6 +13,8 @@ from .models import (
     AccountGroup,
     BillSundry,
     Item,
+    Journal,
+    JournalLine,
     Payment,
     Purchase,
     PurchaseBillSundry,
@@ -22,9 +27,11 @@ from .models import (
     SaleType,
     Unit,
 )
+from .money import ZERO, money
 from .reports import (
     account_ledger,
     balance_sheet,
+    journal_register,
     payment_register,
     period_from_request,
     profit_loss,
@@ -153,6 +160,20 @@ def receipt_register_view(request):
     )
 
 
+def journal_register_view(request):
+    date_from, date_to = period_from_request(request)
+    rows, total = journal_register(date_from, date_to)
+    return TemplateResponse(
+        request,
+        "admin/masters/report_journal.html",
+        _report_context(
+            request,
+            "Journal Register",
+            {"rows": rows, "total": total},
+        ),
+    )
+
+
 def ledger_view(request, account_id=None):
     date_from, date_to = period_from_request(request)
     if account_id is None:
@@ -243,6 +264,11 @@ if not getattr(admin.site, "_erp_urls_patched", False):
                 name="erp_receipt_register",
             ),
             path(
+                "reports/journal-register/",
+                admin.site.admin_view(journal_register_view),
+                name="erp_journal_register",
+            ),
+            path(
                 "reports/stock-summary/",
                 admin.site.admin_view(stock_summary_view),
                 name="erp_stock_summary",
@@ -322,6 +348,88 @@ class PurchaseBillSundryInline(admin.TabularInline):
     autocomplete_fields = ("bill_sundry",)
 
 
+class JournalLineForm(forms.ModelForm):
+    class Meta:
+        model = JournalLine
+        fields = ("account", "debit", "credit", "remarks")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["account"].required = False
+        self.fields["debit"].required = False
+        self.fields["credit"].required = False
+
+    def has_changed(self):
+        if not self.is_bound:
+            return False
+        if self.instance and self.instance.pk:
+            return super().has_changed()
+        account = (self.data.get(self.add_prefix("account")) or "").strip()
+        remarks = (self.data.get(self.add_prefix("remarks")) or "").strip()
+        raw_dr = self.data.get(self.add_prefix("debit")) or 0
+        raw_cr = self.data.get(self.add_prefix("credit")) or 0
+        try:
+            debit = money(raw_dr)
+        except Exception:
+            return True
+        try:
+            credit = money(raw_cr)
+        except Exception:
+            return True
+        if not account and not remarks and debit == 0 and credit == 0:
+            return False
+        return super().has_changed()
+
+
+class JournalLineFormSet(BaseInlineFormSet):
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+        total_dr = ZERO
+        total_cr = ZERO
+        filled = 0
+        for form in self.forms:
+            if not form.cleaned_data or form.cleaned_data.get("DELETE"):
+                continue
+            account = form.cleaned_data.get("account")
+            debit = money(form.cleaned_data.get("debit"))
+            credit = money(form.cleaned_data.get("credit"))
+            if not account and debit == 0 and credit == 0:
+                continue
+            if not account:
+                raise ValidationError("Each journal line needs an account.")
+            if debit < 0 or credit < 0:
+                raise ValidationError("Debit and credit amounts cannot be negative.")
+            if debit and credit:
+                raise ValidationError(
+                    "A line cannot have both debit and credit. Voucher was not saved."
+                )
+            if debit == 0 and credit == 0:
+                raise ValidationError("Enter debit or credit on each used line.")
+            filled += 1
+            total_dr += debit
+            total_cr += credit
+        if filled < 2:
+            raise ValidationError("Enter at least two journal lines.")
+        if total_dr == 0:
+            raise ValidationError("Journal amount cannot be zero.")
+        if total_dr != total_cr:
+            raise ValidationError(
+                f"Debit ({total_dr}) and Credit ({total_cr}) must be equal. "
+                "Voucher was not saved."
+            )
+
+
+class JournalLineInline(admin.TabularInline):
+    model = JournalLine
+    extra = 8
+    form = JournalLineForm
+    formset = JournalLineFormSet
+    autocomplete_fields = ("account",)
+    fields = ("account", "debit", "credit", "remarks")
+
+
 @admin.register(AccountGroup)
 class AccountGroupAdmin(admin.ModelAdmin):
     list_display = ("name", "primary_group", "under_group", "nature")
@@ -339,10 +447,12 @@ class AccountAdmin(admin.ModelAdmin):
         "opening_type",
         "mobile_no",
         "gst",
+        "is_registered",
         "ledger_link",
     )
     search_fields = ("account_name", "mobile_no", "gst")
-    list_filter = ("account_group", "opening_type", "state")
+    list_filter = ("account_group", "opening_type", "state", "is_registered")
+    list_editable = ("is_registered",)
     autocomplete_fields = ("account_group",)
 
     @admin.display(description="Ledger")
@@ -359,9 +469,30 @@ class UnitAdmin(admin.ModelAdmin):
 
 @admin.register(SaleType)
 class SaleTypeAdmin(admin.ModelAdmin):
-    list_display = ("name", "sales_account", "tax_account", "affect_stock", "tax_inclusive")
+    list_display = (
+        "name",
+        "sales_account",
+        "tax_account",
+        "tax_account_2",
+        "tax_split_percent",
+        "affect_stock",
+        "tax_inclusive",
+    )
     search_fields = ("name",)
-    autocomplete_fields = ("sales_account", "tax_account")
+    autocomplete_fields = ("sales_account", "tax_account", "tax_account_2")
+    fieldsets = (
+        (None, {"fields": ("name", "sales_account", "affect_stock", "tax_inclusive")}),
+        (
+            "Tax posting",
+            {
+                "fields": ("tax_account", "tax_account_2", "tax_split_percent"),
+                "description": (
+                    "Local: Tax Account = CGST, Tax Account 2 = SGST, split 50/50. "
+                    "Interstate: Tax Account = IGST and leave Tax Account 2 blank."
+                ),
+            },
+        ),
+    )
 
 
 @admin.register(PurchaseType)
@@ -370,11 +501,26 @@ class PurchaseTypeAdmin(admin.ModelAdmin):
         "name",
         "purchase_account",
         "tax_account",
+        "tax_account_2",
+        "tax_split_percent",
         "affect_stock",
         "tax_inclusive",
     )
     search_fields = ("name",)
-    autocomplete_fields = ("purchase_account", "tax_account")
+    autocomplete_fields = ("purchase_account", "tax_account", "tax_account_2")
+    fieldsets = (
+        (None, {"fields": ("name", "purchase_account", "affect_stock", "tax_inclusive")}),
+        (
+            "Tax posting",
+            {
+                "fields": ("tax_account", "tax_account_2", "tax_split_percent"),
+                "description": (
+                    "Local: Tax Account = CGST, Tax Account 2 = SGST, split 50/50. "
+                    "Interstate: Tax Account = IGST and leave Tax Account 2 blank."
+                ),
+            },
+        ),
+    )
 
 
 @admin.register(Item)
@@ -382,6 +528,7 @@ class ItemAdmin(admin.ModelAdmin):
     list_display = (
         "item_name",
         "item_group",
+        "hsn",
         "main_unit",
         "alt_unit",
         "tax",
@@ -391,7 +538,7 @@ class ItemAdmin(admin.ModelAdmin):
         "opening_main",
         "opening_value",
     )
-    search_fields = ("item_name", "item_group")
+    search_fields = ("item_name", "item_group", "hsn")
     list_filter = ("item_group", "main_unit")
     autocomplete_fields = ("main_unit", "alt_unit")
 
@@ -569,3 +716,56 @@ class PaymentAdmin(CashVoucherAdmin):
 @admin.register(Receipt)
 class ReceiptAdmin(CashVoucherAdmin):
     pass
+
+
+@admin.register(Journal)
+class JournalAdmin(admin.ModelAdmin):
+    list_display = (
+        "voucher_no",
+        "date",
+        "total_debit_list",
+        "lines_summary_display",
+        "narration",
+    )
+    search_fields = ("voucher_no", "narration", "lines__account__account_name")
+    list_filter = ("date",)
+    inlines = [JournalLineInline]
+    readonly_fields = ("total_debit", "total_credit", "difference")
+    fieldsets = (
+        (None, {"fields": ("date", "voucher_no", "narration")}),
+        (
+            "Totals",
+            {
+                "fields": ("total_debit", "total_credit", "difference"),
+                "description": "Debit and credit must be equal or the voucher will not save.",
+            },
+        ),
+    )
+
+    class Media:
+        js = ("masters/js/journal_helper.js",)
+
+    def _totals(self, obj):
+        if not obj or not obj.pk:
+            return {"debit": ZERO, "credit": ZERO, "difference": ZERO}
+        return obj.totals()
+
+    @admin.display(description="Debit")
+    def total_debit(self, obj):
+        return self._totals(obj)["debit"]
+
+    @admin.display(description="Credit")
+    def total_credit(self, obj):
+        return self._totals(obj)["credit"]
+
+    @admin.display(description="Difference")
+    def difference(self, obj):
+        return self._totals(obj)["difference"]
+
+    @admin.display(description="Amount")
+    def total_debit_list(self, obj):
+        return f"{obj.totals()['debit']:,.2f}"
+
+    @admin.display(description="Particulars")
+    def lines_summary_display(self, obj):
+        return obj.lines_summary()

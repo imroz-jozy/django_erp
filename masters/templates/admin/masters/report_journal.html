@@ -1,0 +1,36 @@
+{% extends "admin/masters/report_base.html" %}
+
+{% block report_body %}
+<table class="erp-report">
+  <thead>
+    <tr>
+      <th>Date</th>
+      <th>Voucher No</th>
+      <th>Particulars</th>
+      <th>Narration</th>
+      <th class="num">Amount</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.date }}</td>
+      <td>
+        <a href="{% url 'admin:masters_journal_change' row.id %}">
+          <strong>{{ row.voucher_no }}</strong>
+        </a>
+      </td>
+      <td>{{ row.lines_summary }}</td>
+      <td>{{ row.narration }}</td>
+      <td class="num">{{ row.totals.debit|floatformat:2 }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="5">No vouchers in this period.</td></tr>
+    {% endfor %}
+    <tr class="total">
+      <td colspan="4">Total</td>
+      <td class="num">{{ total|floatformat:2 }}</td>
+    </tr>
+  </tbody>
+</table>
+{% endblock %}

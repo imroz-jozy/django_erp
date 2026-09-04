@@ -1,10 +1,13 @@
 from decimal import Decimal
 
+from django.core.validators import RegexValidator
 from django.db import models
 from django.db.models.signals import post_migrate
 from django.dispatch import receiver
 
 from .money import ZERO, money
+
+HSN_VALIDATOR = RegexValidator(r"^\d*$", "HSN must contain digits only.")
 
 
 # =========================================================
@@ -79,6 +82,11 @@ class Account(models.Model):
     address = models.TextField(blank=True)
     state = models.CharField(max_length=100, blank=True)
     gst = models.CharField(max_length=20, blank=True)
+    is_registered = models.BooleanField(
+        default=False,
+        verbose_name="Registered",
+        help_text="Tick if this party is GST registered.",
+    )
     mobile_no = models.CharField(max_length=20, blank=True)
 
     class Meta:
@@ -138,6 +146,35 @@ class Unit(models.Model):
 # SALE TYPE / PURCHASE TYPE
 # =========================================================
 
+def tax_split_postings(tax_type, tax_amount):
+    """Split item tax across one or two ledgers.
+
+    If tax_account_2 is set (local CGST+SGST), first_percent goes to
+    tax_account and the remainder to tax_account_2. Interstate types leave
+    tax_account_2 blank so 100% posts to tax_account (IGST).
+    """
+    tax_amount = money(tax_amount)
+    if not tax_amount or tax_type is None:
+        return []
+    first = tax_type.tax_account
+    second = getattr(tax_type, "tax_account_2", None)
+    if first and second and first.id != second.id:
+        pct = money(getattr(tax_type, "tax_split_percent", None) or Decimal("50"))
+        first_amt = money(tax_amount * pct / Decimal("100"))
+        second_amt = money(tax_amount - first_amt)
+        parts = []
+        if first_amt:
+            parts.append((first, first_amt))
+        if second_amt:
+            parts.append((second, second_amt))
+        return parts
+    if first:
+        return [(first, tax_amount)]
+    if second:
+        return [(second, tax_amount)]
+    return []
+
+
 class SaleType(models.Model):
 
     name = models.CharField(max_length=100, unique=True)
@@ -153,7 +190,21 @@ class SaleType(models.Model):
         null=True,
         blank=True,
         related_name="sale_type_tax",
-        help_text="Ledger credited for item tax (Duties & Taxes).",
+        help_text="First tax ledger (CGST for local, IGST for interstate).",
+    )
+    tax_account_2 = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="sale_type_tax_2",
+        help_text="Second tax ledger for local tax (SGST). Leave blank for IGST.",
+    )
+    tax_split_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal("50.00"),
+        help_text="Percent of item tax posted to Tax Account. Rest goes to Tax Account 2.",
     )
     affect_stock = models.BooleanField(default=True)
     tax_inclusive = models.BooleanField(default=False)
@@ -165,6 +216,9 @@ class SaleType(models.Model):
 
     def __str__(self):
         return self.name
+
+    def tax_postings(self, tax_amount):
+        return tax_split_postings(self, tax_amount)
 
 
 class PurchaseType(models.Model):
@@ -182,7 +236,21 @@ class PurchaseType(models.Model):
         null=True,
         blank=True,
         related_name="purchase_type_tax",
-        help_text="Ledger debited for item tax (Duties & Taxes).",
+        help_text="First tax ledger (CGST for local, IGST for interstate).",
+    )
+    tax_account_2 = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="purchase_type_tax_2",
+        help_text="Second tax ledger for local tax (SGST). Leave blank for IGST.",
+    )
+    tax_split_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal("50.00"),
+        help_text="Percent of item tax posted to Tax Account. Rest goes to Tax Account 2.",
     )
     affect_stock = models.BooleanField(default=True)
     tax_inclusive = models.BooleanField(default=False)
@@ -194,6 +262,9 @@ class PurchaseType(models.Model):
 
     def __str__(self):
         return self.name
+
+    def tax_postings(self, tax_amount):
+        return tax_split_postings(self, tax_amount)
 
 
 # =========================================================
@@ -221,6 +292,12 @@ class Item(models.Model):
         decimal_places=4,
         default=1,
         help_text="1 main unit = conversion alt units",
+    )
+    hsn = models.CharField(
+        max_length=8,
+        blank=True,
+        validators=[HSN_VALIDATOR],
+        help_text="HSN code, digits only (4, 6 or 8 digits).",
     )
     tax = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     sale_price = models.DecimalField(max_digits=15, decimal_places=2, default=0)
@@ -706,6 +783,88 @@ class Receipt(models.Model):
 
 
 # =========================================================
+# JOURNAL
+# =========================================================
+
+class Journal(models.Model):
+    """Multi-line debit/credit voucher. Totals must match before save."""
+
+    date = models.DateField()
+    voucher_no = models.CharField(max_length=50, blank=True)
+    narration = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+        verbose_name = "Journal Voucher"
+        verbose_name_plural = "Journal Vouchers"
+
+    def __str__(self):
+        return self.voucher_no or f"Journal {self.pk}"
+
+    def save(self, *args, **kwargs):
+        if not self.voucher_no:
+            self.voucher_no = _next_voucher_no(Journal, "JRN-")
+        super().save(*args, **kwargs)
+
+    def totals(self):
+        debit = credit = ZERO
+        for line in self.lines.all():
+            debit += money(line.debit)
+            credit += money(line.credit)
+        return {
+            "debit": money(debit),
+            "credit": money(credit),
+            "difference": money(debit - credit),
+        }
+
+    def lines_summary(self):
+        parts = []
+        for line in self.lines.all():
+            if line.debit:
+                parts.append(f"Dr {line.account.account_name} {line.debit:,.2f}")
+            elif line.credit:
+                parts.append(f"Cr {line.account.account_name} {line.credit:,.2f}")
+        return " | ".join(parts)
+
+
+class JournalLine(models.Model):
+
+    journal = models.ForeignKey(
+        Journal,
+        on_delete=models.CASCADE,
+        related_name="lines",
+    )
+    account = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        related_name="journal_lines",
+    )
+    debit = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    credit = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    remarks = models.CharField(max_length=200, blank=True)
+
+    class Meta:
+        verbose_name = "Journal Line"
+        verbose_name_plural = "Journal Lines"
+
+    def __str__(self):
+        return f"{self.journal.voucher_no} - {self.account}"
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        super().clean()
+        debit = money(self.debit)
+        credit = money(self.credit)
+        if debit < 0 or credit < 0:
+            raise ValidationError("Debit and credit amounts cannot be negative.")
+        if debit and credit:
+            raise ValidationError("A line cannot have both debit and credit.")
+        if debit == 0 and credit == 0:
+            raise ValidationError("Enter debit or credit amount.")
+
+
+# =========================================================
 # DEFAULT MASTERS (Busy / Tally style)
 # =========================================================
 
@@ -901,9 +1060,12 @@ def seed_erp_defaults():
     sales_acc = accounts["Sales"]
     purchase_acc = accounts["Purchase"]
     cgst_out = accounts["CGST Output"]
+    sgst_out = accounts["SGST Output"]
     igst_out = accounts["IGST Output"]
     cgst_in = accounts["CGST Input"]
+    sgst_in = accounts["SGST Input"]
     igst_in = accounts["IGST Input"]
+    half = Decimal("50.00")
 
     local_sale = SaleType.objects.filter(name__iexact="Local Sale").first()
     if not local_sale:
@@ -911,11 +1073,15 @@ def seed_erp_defaults():
             name="Local Sale",
             sales_account=sales_acc,
             tax_account=cgst_out,
+            tax_account_2=sgst_out,
+            tax_split_percent=half,
             affect_stock=True,
         )
     else:
         local_sale.sales_account = sales_acc
         local_sale.tax_account = cgst_out
+        local_sale.tax_account_2 = sgst_out
+        local_sale.tax_split_percent = half
         local_sale.save()
 
     inter_sale = SaleType.objects.filter(name__iexact="Interstate Sale").first()
@@ -924,11 +1090,14 @@ def seed_erp_defaults():
             name="Interstate Sale",
             sales_account=sales_acc,
             tax_account=igst_out,
+            tax_account_2=None,
+            tax_split_percent=half,
             affect_stock=True,
         )
     else:
         inter_sale.sales_account = sales_acc
         inter_sale.tax_account = igst_out
+        inter_sale.tax_account_2 = None
         inter_sale.save()
 
     local_pur = PurchaseType.objects.filter(name__iexact="Local Purchase").first()
@@ -937,11 +1106,15 @@ def seed_erp_defaults():
             name="Local Purchase",
             purchase_account=purchase_acc,
             tax_account=cgst_in,
+            tax_account_2=sgst_in,
+            tax_split_percent=half,
             affect_stock=True,
         )
     else:
         local_pur.purchase_account = purchase_acc
         local_pur.tax_account = cgst_in
+        local_pur.tax_account_2 = sgst_in
+        local_pur.tax_split_percent = half
         local_pur.save()
 
     inter_pur = PurchaseType.objects.filter(name__iexact="Interstate Purchase").first()
@@ -950,11 +1123,14 @@ def seed_erp_defaults():
             name="Interstate Purchase",
             purchase_account=purchase_acc,
             tax_account=igst_in,
+            tax_account_2=None,
+            tax_split_percent=half,
             affect_stock=True,
         )
     else:
         inter_pur.purchase_account = purchase_acc
         inter_pur.tax_account = igst_in
+        inter_pur.tax_account_2 = None
         inter_pur.save()
 
     sundries = [
@@ -1035,8 +1211,10 @@ def _repoint_account(old, new):
     Purchase.objects.filter(account=old).update(account=new)
     SaleType.objects.filter(sales_account=old).update(sales_account=new)
     SaleType.objects.filter(tax_account=old).update(tax_account=new)
+    SaleType.objects.filter(tax_account_2=old).update(tax_account_2=new)
     PurchaseType.objects.filter(purchase_account=old).update(purchase_account=new)
     PurchaseType.objects.filter(tax_account=old).update(tax_account=new)
+    PurchaseType.objects.filter(tax_account_2=old).update(tax_account_2=new)
     BillSundry.objects.filter(posting_account_sale=old).update(posting_account_sale=new)
     BillSundry.objects.filter(posting_account_purchase=old).update(posting_account_purchase=new)
     tables = set(connection.introspection.table_names())
@@ -1046,6 +1224,8 @@ def _repoint_account(old, new):
     if "masters_receipt" in tables:
         Receipt.objects.filter(account=old).update(account=new)
         Receipt.objects.filter(through=old).update(through=new)
+    if "masters_journalline" in tables:
+        JournalLine.objects.filter(account=old).update(account=new)
     try:
         old.delete()
     except ProtectedError:

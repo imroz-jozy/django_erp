@@ -8,6 +8,8 @@ from .models import (
     Account,
     AccountGroup,
     Item,
+    Journal,
+    JournalLine,
     Payment,
     Purchase,
     PurchaseBillSundry,
@@ -70,7 +72,13 @@ def build_ledgers(date_from, date_to):
 
     sales = (
         Sale.objects.filter(date__gte=date_from, date__lte=date_to)
-        .select_related("account", "sale_type", "sale_type__sales_account", "sale_type__tax_account")
+        .select_related(
+            "account",
+            "sale_type",
+            "sale_type__sales_account",
+            "sale_type__tax_account",
+            "sale_type__tax_account_2",
+        )
         .prefetch_related(
             Prefetch("items", queryset=SaleItem.objects.select_related("item")),
             Prefetch(
@@ -84,9 +92,9 @@ def build_ledgers(date_from, date_to):
         _post(ledgers, sale.account, debit=totals["net_amount"])
         sales_acc = sale.sale_type.sales_account if sale.sale_type_id else None
         _post(ledgers, sales_acc, credit=totals["item_amount"])
-        tax_acc = sale.sale_type.tax_account if sale.sale_type_id else None
-        if totals["tax_amount"]:
-            _post(ledgers, tax_acc, credit=totals["tax_amount"])
+        if sale.sale_type_id and totals["tax_amount"]:
+            for tax_acc, tax_amt in sale.sale_type.tax_postings(totals["tax_amount"]):
+                _post(ledgers, tax_acc, credit=tax_amt)
         for line, signed in zip(sale.bill_sundries.all(), totals["sundry_signed_amounts"]):
             acc = line.bill_sundry.posting_account_sale or sales_acc
             if signed >= 0:
@@ -101,6 +109,7 @@ def build_ledgers(date_from, date_to):
             "purchase_type",
             "purchase_type__purchase_account",
             "purchase_type__tax_account",
+            "purchase_type__tax_account_2",
         )
         .prefetch_related(
             Prefetch("items", queryset=PurchaseItem.objects.select_related("item")),
@@ -119,9 +128,9 @@ def build_ledgers(date_from, date_to):
             purchase.purchase_type.purchase_account if purchase.purchase_type_id else None
         )
         _post(ledgers, purchase_acc, debit=totals["item_amount"])
-        tax_acc = purchase.purchase_type.tax_account if purchase.purchase_type_id else None
-        if totals["tax_amount"]:
-            _post(ledgers, tax_acc, debit=totals["tax_amount"])
+        if purchase.purchase_type_id and totals["tax_amount"]:
+            for tax_acc, tax_amt in purchase.purchase_type.tax_postings(totals["tax_amount"]):
+                _post(ledgers, tax_acc, debit=tax_amt)
         for line, signed in zip(purchase.bill_sundries.all(), totals["sundry_signed_amounts"]):
             acc = line.bill_sundry.posting_account_purchase or purchase_acc
             if signed >= 0:
@@ -142,6 +151,14 @@ def build_ledgers(date_from, date_to):
     for rec in receipts:
         _post(ledgers, rec.through, debit=rec.amount)
         _post(ledgers, rec.account, credit=rec.amount)
+
+    journals = (
+        Journal.objects.filter(date__gte=date_from, date__lte=date_to)
+        .prefetch_related("lines__account")
+    )
+    for jv in journals:
+        for line in jv.lines.all():
+            _post(ledgers, line.account, debit=line.debit, credit=line.credit)
 
     rows = []
     for data in ledgers.values():
@@ -513,6 +530,20 @@ def receipt_register(date_from, date_to):
     return rows, total
 
 
+def journal_register(date_from, date_to):
+    rows = []
+    total = ZERO
+    qs = (
+        Journal.objects.filter(date__gte=date_from, date__lte=date_to)
+        .prefetch_related("lines", "lines__account")
+    )
+    for jv in qs:
+        amount = jv.totals()["debit"]
+        total += amount
+        rows.append(jv)
+    return rows, money(total)
+
+
 def _append_entry(entries, date, vtype, vno, narration, debit, credit):
     debit = money(debit)
     credit = money(credit)
@@ -535,7 +566,11 @@ def _voucher_entries_for_account(account):
     acc_id = account.id
 
     sales = Sale.objects.select_related(
-        "account", "sale_type", "sale_type__sales_account", "sale_type__tax_account"
+        "account",
+        "sale_type",
+        "sale_type__sales_account",
+        "sale_type__tax_account",
+        "sale_type__tax_account_2",
     ).prefetch_related(
         Prefetch("items", queryset=SaleItem.objects.select_related("item")),
         Prefetch(
@@ -556,11 +591,12 @@ def _voucher_entries_for_account(account):
             _append_entry(
                 entries, sale.date, "Sale", sale.invoice_no, sale.narration, 0, totals["item_amount"]
             )
-        tax_acc = sale.sale_type.tax_account if sale.sale_type_id else None
-        if tax_acc and tax_acc.id == acc_id and totals["tax_amount"]:
-            _append_entry(
-                entries, sale.date, "Sale", sale.invoice_no, sale.narration, 0, totals["tax_amount"]
-            )
+        if sale.sale_type_id and totals["tax_amount"]:
+            for tax_acc, tax_amt in sale.sale_type.tax_postings(totals["tax_amount"]):
+                if tax_acc and tax_acc.id == acc_id:
+                    _append_entry(
+                        entries, sale.date, "Sale", sale.invoice_no, sale.narration, 0, tax_amt
+                    )
         for line, signed in zip(sale.bill_sundries.all(), totals["sundry_signed_amounts"]):
             acc = line.bill_sundry.posting_account_sale or sales_acc
             if not acc or acc.id != acc_id:
@@ -577,6 +613,7 @@ def _voucher_entries_for_account(account):
         "purchase_type",
         "purchase_type__purchase_account",
         "purchase_type__tax_account",
+        "purchase_type__tax_account_2",
     ).prefetch_related(
         Prefetch("items", queryset=PurchaseItem.objects.select_related("item")),
         Prefetch(
@@ -611,17 +648,18 @@ def _voucher_entries_for_account(account):
                 totals["item_amount"],
                 0,
             )
-        tax_acc = purchase.purchase_type.tax_account if purchase.purchase_type_id else None
-        if tax_acc and tax_acc.id == acc_id and totals["tax_amount"]:
-            _append_entry(
-                entries,
-                purchase.date,
-                "Purchase",
-                purchase.invoice_no,
-                purchase.narration,
-                totals["tax_amount"],
-                0,
-            )
+        if purchase.purchase_type_id and totals["tax_amount"]:
+            for tax_acc, tax_amt in purchase.purchase_type.tax_postings(totals["tax_amount"]):
+                if tax_acc and tax_acc.id == acc_id:
+                    _append_entry(
+                        entries,
+                        purchase.date,
+                        "Purchase",
+                        purchase.invoice_no,
+                        purchase.narration,
+                        tax_amt,
+                        0,
+                    )
         for line, signed in zip(purchase.bill_sundries.all(), totals["sundry_signed_amounts"]):
             acc = line.bill_sundry.posting_account_purchase or purchase_acc
             if not acc or acc.id != acc_id:
@@ -658,6 +696,27 @@ def _voucher_entries_for_account(account):
             _append_entry(entries, rec.date, "Receipt", rec.voucher_no, rec.narration, rec.amount, 0)
         if rec.account_id == acc_id:
             _append_entry(entries, rec.date, "Receipt", rec.voucher_no, rec.narration, 0, rec.amount)
+
+    journals = (
+        Journal.objects.filter(lines__account_id=acc_id)
+        .distinct()
+        .prefetch_related(
+            Prefetch("lines", queryset=JournalLine.objects.select_related("account"))
+        )
+    )
+    for jv in journals:
+        for line in jv.lines.all():
+            if line.account_id != acc_id:
+                continue
+            _append_entry(
+                entries,
+                jv.date,
+                "Journal",
+                jv.voucher_no,
+                line.remarks or jv.narration,
+                line.debit,
+                line.credit,
+            )
 
     entries.sort(key=lambda e: (e["date"], e["vtype"], e["voucher_no"]))
     return entries
