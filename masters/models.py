@@ -46,6 +46,15 @@ class AccountGroup(models.Model):
     def __str__(self):
         return self.name
 
+    def save(self, *args, **kwargs):
+        # A group placed under another group is always secondary and follows
+        # the parent's accounting nature (Asset, Liability, Income, etc.).
+        # This keeps manual admin entry consistent with the Excel importer.
+        if self.under_group_id:
+            self.primary_group = False
+            self.nature = self.under_group.nature
+        super().save(*args, **kwargs)
+
     def is_balance_sheet(self):
         return self.nature in (
             self.Nature.ASSET,
@@ -715,23 +724,16 @@ def _next_voucher_no(model, prefix):
 
 
 class Payment(models.Model):
-    """Debit party/expense, credit cash/bank."""
+    """Payment voucher: debit one or more parties, credit one cash/bank ledger."""
 
     date = models.DateField()
     voucher_no = models.CharField(max_length=50, blank=True)
-    account = models.ForeignKey(
-        Account,
-        on_delete=models.PROTECT,
-        related_name="payments",
-        help_text="Party or expense ledger (debited).",
-    )
     through = models.ForeignKey(
         Account,
         on_delete=models.PROTECT,
         related_name="payments_through",
         help_text="Cash or bank ledger (credited).",
     )
-    amount = models.DecimalField(max_digits=15, decimal_places=2)
     narration = models.TextField(blank=True)
 
     class Meta:
@@ -747,25 +749,48 @@ class Payment(models.Model):
             self.voucher_no = _next_voucher_no(Payment, "PMT-")
         super().save(*args, **kwargs)
 
+    @property
+    def total_amount(self):
+        return money(sum((line.amount for line in self.lines.all()), ZERO))
 
-class Receipt(models.Model):
-    """Debit cash/bank, credit party/income."""
+    def parties_summary(self):
+        return ", ".join(
+            f"{line.account.account_name} ({line.amount:,.2f})"
+            for line in self.lines.select_related("account")
+        )
 
-    date = models.DateField()
-    voucher_no = models.CharField(max_length=50, blank=True)
+
+class PaymentLine(models.Model):
+    """A party or expense amount paid from a Payment voucher."""
+
+    payment = models.ForeignKey(Payment, on_delete=models.CASCADE, related_name="lines")
     account = models.ForeignKey(
         Account,
         on_delete=models.PROTECT,
-        related_name="receipts",
-        help_text="Party or income ledger (credited).",
+        related_name="payment_lines",
+        help_text="Party or expense ledger debited by this payment.",
     )
+    amount = models.DecimalField(max_digits=15, decimal_places=2)
+
+    class Meta:
+        verbose_name = "Payment Line"
+        verbose_name_plural = "Payment Lines"
+
+    def __str__(self):
+        return f"{self.payment.voucher_no} - {self.account}"
+
+
+class Receipt(models.Model):
+    """Receipt voucher: debit one cash/bank ledger, credit one or more parties."""
+
+    date = models.DateField()
+    voucher_no = models.CharField(max_length=50, blank=True)
     through = models.ForeignKey(
         Account,
         on_delete=models.PROTECT,
         related_name="receipts_through",
         help_text="Cash or bank ledger (debited).",
     )
-    amount = models.DecimalField(max_digits=15, decimal_places=2)
     narration = models.TextField(blank=True)
 
     class Meta:
@@ -780,6 +805,36 @@ class Receipt(models.Model):
         if not self.voucher_no:
             self.voucher_no = _next_voucher_no(Receipt, "RCT-")
         super().save(*args, **kwargs)
+
+    @property
+    def total_amount(self):
+        return money(sum((line.amount for line in self.lines.all()), ZERO))
+
+    def parties_summary(self):
+        return ", ".join(
+            f"{line.account.account_name} ({line.amount:,.2f})"
+            for line in self.lines.select_related("account")
+        )
+
+
+class ReceiptLine(models.Model):
+    """A party or income amount received into a Receipt voucher."""
+
+    receipt = models.ForeignKey(Receipt, on_delete=models.CASCADE, related_name="lines")
+    account = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        related_name="receipt_lines",
+        help_text="Party or income ledger credited by this receipt.",
+    )
+    amount = models.DecimalField(max_digits=15, decimal_places=2)
+
+    class Meta:
+        verbose_name = "Receipt Line"
+        verbose_name_plural = "Receipt Lines"
+
+    def __str__(self):
+        return f"{self.receipt.voucher_no} - {self.account}"
 
 
 # =========================================================
@@ -1219,11 +1274,13 @@ def _repoint_account(old, new):
     BillSundry.objects.filter(posting_account_purchase=old).update(posting_account_purchase=new)
     tables = set(connection.introspection.table_names())
     if "masters_payment" in tables:
-        Payment.objects.filter(account=old).update(account=new)
         Payment.objects.filter(through=old).update(through=new)
+    if "masters_paymentline" in tables:
+        PaymentLine.objects.filter(account=old).update(account=new)
     if "masters_receipt" in tables:
-        Receipt.objects.filter(account=old).update(account=new)
         Receipt.objects.filter(through=old).update(through=new)
+    if "masters_receiptline" in tables:
+        ReceiptLine.objects.filter(account=old).update(account=new)
     if "masters_journalline" in tables:
         JournalLine.objects.filter(account=old).update(account=new)
     try:

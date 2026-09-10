@@ -1,5 +1,8 @@
 from datetime import date
 from decimal import Decimal
+from io import BytesIO
+
+import openpyxl
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -10,10 +13,15 @@ from django.urls import reverse
 from masters.models import (
     Account,
     AccountGroup,
+    Item,
     Journal,
     JournalLine,
+    Purchase,
+    Sale,
+    Unit,
 )
 from masters.admin import JournalLineForm, JournalLineFormSet
+from masters.excel_service import import_purchases_from_excel, import_sales_from_excel
 from masters.reports import (
     account_ledger,
     build_ledgers,
@@ -330,3 +338,145 @@ class JournalAdminViewsTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, self.journal.voucher_no)
         self.assertContains(response, "Particulars")
+
+
+class ExcelImportViewsTestCase(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.admin_user = User.objects.create_superuser(
+            username="admin_test",
+            password="testpassword",
+            email="admin@test.com",
+        )
+        self.client = Client()
+        self.client.force_login(self.admin_user)
+
+    def test_item_import_view_get(self):
+        url = reverse("admin:erp_item_import")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Import Items from Excel")
+        self.assertContains(response, "Download Item Template")
+        self.assertContains(response, "Template Column Reference")
+
+    def test_account_import_view_get(self):
+        url = reverse("admin:erp_account_import")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Import Accounts from Excel")
+        self.assertContains(response, "Download Account Template")
+        self.assertContains(response, "Template Column Reference")
+
+    def test_item_changelist_has_buttons(self):
+        url = reverse("admin:masters_item_changelist")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Download Excel Template")
+        self.assertContains(response, "Import from Excel")
+
+    def test_account_changelist_has_buttons(self):
+        url = reverse("admin:masters_account_changelist")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Download Excel Template")
+        self.assertContains(response, "Import from Excel")
+
+    def test_erp_dashboard_has_import_section(self):
+        url = reverse("admin:index")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Excel Data Import")
+        self.assertContains(response, "Import Items")
+        self.assertContains(response, "Import Accounts")
+        self.assertContains(response, "Import Sales")
+        self.assertContains(response, "Import Purchases")
+
+    def test_sale_import_view_get(self):
+        url = reverse("admin:erp_sale_import")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Import Sale Vouchers from Excel")
+        self.assertContains(response, "Download Sale Voucher Template")
+        self.assertContains(response, "Default Sale Type")
+
+    def test_purchase_import_view_get(self):
+        url = reverse("admin:erp_purchase_import")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Import Purchase Vouchers from Excel")
+        self.assertContains(response, "Download Purchase Voucher Template")
+        self.assertContains(response, "Default Purchase Type")
+
+    def test_sale_changelist_has_buttons(self):
+        url = reverse("admin:masters_sale_changelist")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Download Excel Template")
+        self.assertContains(response, "Import from Excel")
+
+    def test_purchase_changelist_has_buttons(self):
+        url = reverse("admin:masters_purchase_changelist")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Download Excel Template")
+        self.assertContains(response, "Import from Excel")
+
+
+class VoucherExcelImportTestCase(TestCase):
+    """Regression tests for Excel's explicit zero values."""
+
+    def setUp(self):
+        group = AccountGroup.objects.create(
+            name="Excel Import Test Group",
+            primary_group=False,
+            nature=AccountGroup.Nature.ASSET,
+        )
+        self.party = Account.objects.create(
+            account_name="Excel Import Test Party",
+            account_group=group,
+        )
+        unit = Unit.objects.create(name="EIT-PCS")
+        self.item = Item.objects.create(
+            item_name="Excel Import Test Item",
+            main_unit=unit,
+            tax=Decimal("18.00"),
+            sale_price=Decimal("100.00"),
+            purchase_price=Decimal("80.00"),
+        )
+
+    def _workbook(self, party_header, invoice_no):
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.append([
+            "Date *", "Invoice No *", party_header, "Item Name *",
+            "Quantity *", "Rate", "Tax Rate %",
+        ])
+        sheet.append([
+            "2026-09-01", invoice_no, self.party.account_name,
+            self.item.item_name, 1, 0, 0,
+        ])
+        output = BytesIO()
+        workbook.save(output)
+        output.seek(0)
+        return output
+
+    def test_sale_import_preserves_explicit_zero_rate_and_tax(self):
+        result = import_sales_from_excel(
+            self._workbook("Party (Customer) *", "EXCEL-SALE-0")
+        )
+
+        self.assertTrue(result["success"], result["errors"])
+        line = Sale.objects.get(invoice_no="EXCEL-SALE-0").items.get()
+        self.assertEqual(line.rate, Decimal("0.00"))
+        self.assertEqual(line.tax, Decimal("0.00"))
+
+    def test_purchase_import_preserves_explicit_zero_rate_and_tax(self):
+        result = import_purchases_from_excel(
+            self._workbook("Party (Supplier) *", "EXCEL-PURCHASE-0")
+        )
+
+        self.assertTrue(result["success"], result["errors"])
+        line = Purchase.objects.get(invoice_no="EXCEL-PURCHASE-0").items.get()
+        self.assertEqual(line.rate, Decimal("0.00"))
+        self.assertEqual(line.tax, Decimal("0.00"))
+

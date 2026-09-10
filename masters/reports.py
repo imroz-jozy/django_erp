@@ -138,19 +138,29 @@ def build_ledgers(date_from, date_to):
             else:
                 _post(ledgers, acc, credit=-signed)
 
-    payments = Payment.objects.filter(date__gte=date_from, date__lte=date_to).select_related(
-        "account", "through"
+    payments = (
+        Payment.objects.filter(date__gte=date_from, date__lte=date_to)
+        .select_related("through")
+        .prefetch_related("lines__account")
     )
     for pmt in payments:
-        _post(ledgers, pmt.account, debit=pmt.amount)
-        _post(ledgers, pmt.through, credit=pmt.amount)
+        total = ZERO
+        for line in pmt.lines.all():
+            _post(ledgers, line.account, debit=line.amount)
+            total += money(line.amount)
+        _post(ledgers, pmt.through, credit=total)
 
-    receipts = Receipt.objects.filter(date__gte=date_from, date__lte=date_to).select_related(
-        "account", "through"
+    receipts = (
+        Receipt.objects.filter(date__gte=date_from, date__lte=date_to)
+        .select_related("through")
+        .prefetch_related("lines__account")
     )
     for rec in receipts:
-        _post(ledgers, rec.through, debit=rec.amount)
-        _post(ledgers, rec.account, credit=rec.amount)
+        total = ZERO
+        for line in rec.lines.all():
+            _post(ledgers, line.account, credit=line.amount)
+            total += money(line.amount)
+        _post(ledgers, rec.through, debit=total)
 
     journals = (
         Journal.objects.filter(date__gte=date_from, date__lte=date_to)
@@ -512,21 +522,21 @@ def purchase_register(date_from, date_to):
 
 def payment_register(date_from, date_to):
     rows = list(
-        Payment.objects.filter(date__gte=date_from, date__lte=date_to).select_related(
-            "account", "through"
-        )
+        Payment.objects.filter(date__gte=date_from, date__lte=date_to)
+        .select_related("through")
+        .prefetch_related("lines__account")
     )
-    total = money(sum((r.amount for r in rows), ZERO))
+    total = money(sum((r.total_amount for r in rows), ZERO))
     return rows, total
 
 
 def receipt_register(date_from, date_to):
     rows = list(
-        Receipt.objects.filter(date__gte=date_from, date__lte=date_to).select_related(
-            "account", "through"
-        )
+        Receipt.objects.filter(date__gte=date_from, date__lte=date_to)
+        .select_related("through")
+        .prefetch_related("lines__account")
     )
-    total = money(sum((r.amount for r in rows), ZERO))
+    total = money(sum((r.total_amount for r in rows), ZERO))
     return rows, total
 
 
@@ -685,17 +695,19 @@ def _voucher_entries_for_account(account):
                     -signed,
                 )
 
-    for pmt in Payment.objects.select_related("account", "through"):
-        if pmt.account_id == acc_id:
-            _append_entry(entries, pmt.date, "Payment", pmt.voucher_no, pmt.narration, pmt.amount, 0)
+    for pmt in Payment.objects.select_related("through").prefetch_related("lines__account"):
+        for line in pmt.lines.all():
+            if line.account_id == acc_id:
+                _append_entry(entries, pmt.date, "Payment", pmt.voucher_no, pmt.narration, line.amount, 0)
         if pmt.through_id == acc_id:
-            _append_entry(entries, pmt.date, "Payment", pmt.voucher_no, pmt.narration, 0, pmt.amount)
+            _append_entry(entries, pmt.date, "Payment", pmt.voucher_no, pmt.narration, 0, pmt.total_amount)
 
-    for rec in Receipt.objects.select_related("account", "through"):
+    for rec in Receipt.objects.select_related("through").prefetch_related("lines__account"):
         if rec.through_id == acc_id:
-            _append_entry(entries, rec.date, "Receipt", rec.voucher_no, rec.narration, rec.amount, 0)
-        if rec.account_id == acc_id:
-            _append_entry(entries, rec.date, "Receipt", rec.voucher_no, rec.narration, 0, rec.amount)
+            _append_entry(entries, rec.date, "Receipt", rec.voucher_no, rec.narration, rec.total_amount, 0)
+        for line in rec.lines.all():
+            if line.account_id == acc_id:
+                _append_entry(entries, rec.date, "Receipt", rec.voucher_no, rec.narration, 0, line.amount)
 
     journals = (
         Journal.objects.filter(lines__account_id=acc_id)

@@ -1,0 +1,16 @@
+{% extends "admin/change_list.html" %}
+{% load i18n admin_urls %}
+
+{% block object-tools-items %}
+  <li>
+    <a href="{% url 'admin:erp_sale_template' %}" style="background-color: #28a745; color: #ffffff !important; font-weight: 600; border-radius: 4px; padding: 5px 12px; margin-right: 6px; display: inline-flex; align-items: center;">
+      📥 Download Excel Template
+    </a>
+  </li>
+  <li>
+    <a href="{% url 'admin:erp_sale_import' %}" style="background-color: #007bff; color: #ffffff !important; font-weight: 600; border-radius: 4px; padding: 5px 12px; margin-right: 6px; display: inline-flex; align-items: center;">
+      📤 Import from Excel
+    </a>
+  </li>
+  {{ block.super }}
+{% endblock %}

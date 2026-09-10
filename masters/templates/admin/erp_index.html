@@ -48,6 +48,75 @@
       </tr>
     </table>
   </div>
+  <div class="module">
+    <table>
+      <caption>Excel Data Import</caption>
+      <tr>
+        <th scope="row">
+          <a href="{% url 'admin:erp_item_import' %}">Import Items</a>
+          &nbsp;|&nbsp;
+          <a href="{% url 'admin:erp_item_template' %}" style="color: #28a745;">📥 Template</a>
+        </th>
+        <td>Bulk import stock items with units, prices, HSN and tax rates</td>
+      </tr>
+      <tr>
+        <th scope="row">
+          <a href="{% url 'admin:erp_account_import' %}">Import Accounts</a>
+          &nbsp;|&nbsp;
+          <a href="{% url 'admin:erp_account_template' %}" style="color: #28a745;">📥 Template</a>
+        </th>
+        <td>Bulk import parties & ledgers with groups, GSTIN and opening balances</td>
+      </tr>
+      <tr>
+        <th scope="row">
+          <a href="{% url 'admin:erp_account_group_import' %}">Import Account Groups</a>
+          &nbsp;|&nbsp;
+          <a href="{% url 'admin:erp_account_group_template' %}" style="color: #28a745;">Template</a>
+        </th>
+        <td>Bulk import primary and secondary account groups with inherited nature</td>
+      </tr>
+      <tr>
+        <th scope="row">
+          <a href="{% url 'admin:erp_sale_import' %}">Import Sales</a>
+          &nbsp;|&nbsp;
+          <a href="{% url 'admin:erp_sale_template' %}" style="color: #28a745;">📥 Template</a>
+        </th>
+        <td>Bulk import sale invoices with customer, items, sundries and taxes</td>
+      </tr>
+      <tr>
+        <th scope="row">
+          <a href="{% url 'admin:erp_purchase_import' %}">Import Purchases</a>
+          &nbsp;|&nbsp;
+          <a href="{% url 'admin:erp_purchase_template' %}" style="color: #28a745;">📥 Template</a>
+        </th>
+        <td>Bulk import purchase invoices with supplier, items, sundries and taxes</td>
+      </tr>
+      <tr>
+        <th scope="row">
+          <a href="{% url 'admin:erp_payment_import' %}">Import Payments</a>
+          &nbsp;|&nbsp;
+          <a href="{% url 'admin:erp_payment_template' %}" style="color: #28a745;">Template</a>
+        </th>
+        <td>Bulk import payment vouchers with multiple party or expense lines</td>
+      </tr>
+      <tr>
+        <th scope="row">
+          <a href="{% url 'admin:erp_receipt_import' %}">Import Receipts</a>
+          &nbsp;|&nbsp;
+          <a href="{% url 'admin:erp_receipt_template' %}" style="color: #28a745;">Template</a>
+        </th>
+        <td>Bulk import receipt vouchers with multiple party or income lines</td>
+      </tr>
+      <tr>
+        <th scope="row">
+          <a href="{% url 'admin:erp_journal_import' %}">Import Journal Vouchers</a>
+          &nbsp;|&nbsp;
+          <a href="{% url 'admin:erp_journal_template' %}" style="color: #28a745;">Template</a>
+        </th>
+        <td>Bulk import balanced debit and credit journal entries</td>
+      </tr>
+    </table>
+  </div>
   {% include "admin/app_list.html" with app_list=app_list show_changelinks=True %}
 </div>
 {% endblock %}

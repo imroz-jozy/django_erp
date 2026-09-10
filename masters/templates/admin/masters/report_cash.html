@@ -17,10 +17,10 @@
     <tr>
       <td>{{ row.date }}</td>
       <td>{{ row.voucher_no }}</td>
-      <td>{{ row.account }}</td>
+      <td>{{ row.parties_summary }}</td>
       <td>{{ row.through }}</td>
       <td>{{ row.narration }}</td>
-      <td class="num">{{ row.amount }}</td>
+      <td class="num">{{ row.total_amount }}</td>
     </tr>
     {% empty %}
     <tr><td colspan="6">No vouchers in this period.</td></tr>
