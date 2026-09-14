@@ -3,6 +3,123 @@
 
 {% block content %}
 <div id="content-main">
+
+  <div class="erp-quick-actions">
+    <a class="button erp-primary-action" href="{% url 'admin:masters_sale_add' %}">+ New Sale</a>
+    <a class="button" href="{% url 'admin:masters_purchase_add' %}">+ New Purchase</a>
+    <a class="button" href="{% url 'admin:masters_payment_add' %}">+ New Payment</a>
+    <a class="button" href="{% url 'admin:masters_receipt_add' %}">+ New Receipt</a>
+    <a class="button" href="{% url 'admin:masters_journal_add' %}">+ New Journal</a>
+    <a class="button" href="{% url 'admin:masters_item_add' %}">+ New Item</a>
+  </div>
+
+  {% if erp_dashboard %}
+  <div class="erp-dashboard">
+
+    <div class="erp-hero">
+      <div class="erp-hero-card">
+        <div class="erp-hero-label">Cash &amp; Bank balance, as of today</div>
+        <div class="erp-hero-value">₹ {{ erp_dashboard.cash_bank_balance }}</div>
+        <div class="erp-hero-sub">Across all cash and bank ledgers</div>
+      </div>
+      <div class="erp-stat-stack">
+        <div class="erp-stat erp-tone-credit">
+          <span class="erp-stat-label">Receivable (Debtors)</span>
+          <span class="erp-stat-value">{{ erp_dashboard.receivable_total }}</span>
+        </div>
+        <div class="erp-stat erp-tone-debit">
+          <span class="erp-stat-label">Payable (Creditors)</span>
+          <span class="erp-stat-value">{{ erp_dashboard.payable_total }}</span>
+        </div>
+      </div>
+      <div class="erp-stat-stack">
+        <div class="erp-stat">
+          <span class="erp-stat-label">Closing Stock value</span>
+          <span class="erp-stat-value">{{ erp_dashboard.closing_stock_value }}</span>
+        </div>
+        <div class="erp-stat">
+          <span class="erp-stat-label">Zero / negative stock items</span>
+          <span class="erp-stat-value">{{ erp_dashboard.low_stock_rows|length }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="erp-section-heading">This month — {{ erp_dashboard.month_start|date:"d M" }} to {{ erp_dashboard.today|date:"d M Y" }}</div>
+    <div class="erp-dashboard-columns">
+      <div class="erp-stat erp-tone-credit">
+        <span class="erp-stat-label">Sales — {{ erp_dashboard.sale_month_count }} invoice{{ erp_dashboard.sale_month_count|pluralize }}</span>
+        <span class="erp-stat-value">{{ erp_dashboard.sale_month_total }}</span>
+      </div>
+      <div class="erp-stat erp-tone-debit">
+        <span class="erp-stat-label">Purchases — {{ erp_dashboard.purchase_month_count }} invoice{{ erp_dashboard.purchase_month_count|pluralize }}</span>
+        <span class="erp-stat-value">{{ erp_dashboard.purchase_month_total }}</span>
+      </div>
+      <div class="erp-stat erp-tone-credit">
+        <span class="erp-stat-label">Received</span>
+        <span class="erp-stat-value">{{ erp_dashboard.receipt_month_total }}</span>
+      </div>
+      <div class="erp-stat erp-tone-debit">
+        <span class="erp-stat-label">Paid</span>
+        <span class="erp-stat-value">{{ erp_dashboard.payment_month_total }}</span>
+      </div>
+    </div>
+
+    <div class="erp-section-heading">Recent activity</div>
+    <div class="erp-dashboard-columns">
+      <div class="erp-panel">
+        <h2>Recent Sales</h2>
+        {% if erp_dashboard.recent_sales %}
+        <table>
+          {% for sale in erp_dashboard.recent_sales %}
+          <tr>
+            <td><a href="{% url 'admin:masters_sale_change' sale.pk %}">{{ sale.invoice_no }}</a></td>
+            <td>{{ sale.date }}</td>
+            <td>{{ sale.account }}</td>
+            <td class="num">{{ sale.net_amount }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% else %}
+        <div class="erp-empty">No sales yet. <a href="{% url 'admin:masters_sale_add' %}">Create the first one.</a></div>
+        {% endif %}
+      </div>
+
+      <div class="erp-panel">
+        <h2>Recent Purchases</h2>
+        {% if erp_dashboard.recent_purchases %}
+        <table>
+          {% for purchase in erp_dashboard.recent_purchases %}
+          <tr>
+            <td><a href="{% url 'admin:masters_purchase_change' purchase.pk %}">{{ purchase.invoice_no }}</a></td>
+            <td>{{ purchase.date }}</td>
+            <td>{{ purchase.account }}</td>
+            <td class="num">{{ purchase.net_amount }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% else %}
+        <div class="erp-empty">No purchases yet. <a href="{% url 'admin:masters_purchase_add' %}">Create the first one.</a></div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if erp_dashboard.low_stock_rows %}
+    <div class="erp-panel" style="margin-top:16px;">
+      <h2>Zero / Negative Stock</h2>
+      <table>
+        {% for row in erp_dashboard.low_stock_rows %}
+        <tr>
+          <td>{{ row.item.item_name }}</td>
+          <td><span class="erp-badge">{{ row.closing_qty }} {{ row.item.main_unit.print_name }}</span></td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div class="erp-section-heading" id="import">Reports &amp; Data</div>
   <div class="module">
     <table>
       <caption>Reports</caption>
@@ -117,6 +234,5 @@
       </tr>
     </table>
   </div>
-  {% include "admin/app_list.html" with app_list=app_list show_changelinks=True %}
 </div>
 {% endblock %}

@@ -1,0 +1,135 @@
+{% extends "admin/masters/report_base.html" %}
+
+{% block report_body %}
+<p style="color: var(--body-quiet-color, #666); margin: 0 0 12px;">
+  B2B invoices (party has a GSTIN) listed individually, B2C aggregated by rate,
+  plus Credit/Debit Notes against B2B parties — matches GSTR-1's outward supply tables.
+</p>
+
+<h2 style="margin: 20px 0 8px;">B2B Invoices (Table 4)</h2>
+<table class="erp-report">
+  <thead>
+    <tr>
+      <th>Date</th>
+      <th>Invoice No</th>
+      <th>Customer</th>
+      <th>GSTIN</th>
+      <th>Place of Supply</th>
+      <th class="num">Taxable Value</th>
+      <th class="num">CGST</th>
+      <th class="num">SGST</th>
+      <th class="num">IGST</th>
+      <th class="num">Cess</th>
+      <th class="num">Total</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in b2b_rows %}
+    <tr>
+      <td>{{ row.date }}</td>
+      <td>{{ row.voucher_no }}</td>
+      <td>{{ row.account }}</td>
+      <td>{{ row.gstin }}</td>
+      <td>{{ row.place_of_supply }}</td>
+      <td class="num">{{ row.taxable }}</td>
+      <td class="num">{{ row.cgst }}</td>
+      <td class="num">{{ row.sgst }}</td>
+      <td class="num">{{ row.igst }}</td>
+      <td class="num">{{ row.cess }}</td>
+      <td class="num">{{ row.total }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="11">No B2B invoices in this period.</td></tr>
+    {% endfor %}
+    <tr class="total">
+      <td colspan="10">B2B Total</td>
+      <td class="num">{{ b2b_total }}</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 style="margin: 28px 0 8px;">B2C Supplies by Rate (Table 7)</h2>
+<table class="erp-report">
+  <thead>
+    <tr>
+      <th class="num">Rate %</th>
+      <th class="num">Taxable Value</th>
+      <th class="num">CGST</th>
+      <th class="num">SGST</th>
+      <th class="num">IGST</th>
+      <th class="num">Cess</th>
+      <th class="num">Total</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in b2c_rows %}
+    <tr>
+      <td class="num">{{ row.rate }}</td>
+      <td class="num">{{ row.taxable }}</td>
+      <td class="num">{{ row.cgst }}</td>
+      <td class="num">{{ row.sgst }}</td>
+      <td class="num">{{ row.igst }}</td>
+      <td class="num">{{ row.cess }}</td>
+      <td class="num">{{ row.total }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="7">No B2C supplies in this period.</td></tr>
+    {% endfor %}
+    <tr class="total">
+      <td colspan="6">B2C Total</td>
+      <td class="num">{{ b2c_total }}</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 style="margin: 28px 0 8px;">Credit / Debit Notes — B2B (Table 9B)</h2>
+<table class="erp-report">
+  <thead>
+    <tr>
+      <th>Type</th>
+      <th>Date</th>
+      <th>Voucher No</th>
+      <th>Party</th>
+      <th>GSTIN</th>
+      <th class="num">Taxable Value</th>
+      <th class="num">CGST</th>
+      <th class="num">SGST</th>
+      <th class="num">IGST</th>
+      <th class="num">Cess</th>
+      <th class="num">Total</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in note_rows %}
+    <tr>
+      <td>{{ row.type }}</td>
+      <td>{{ row.date }}</td>
+      <td>{{ row.voucher_no }}</td>
+      <td>{{ row.account }}</td>
+      <td>{{ row.gstin }}</td>
+      <td class="num">{{ row.taxable }}</td>
+      <td class="num">{{ row.cgst }}</td>
+      <td class="num">{{ row.sgst }}</td>
+      <td class="num">{{ row.igst }}</td>
+      <td class="num">{{ row.cess }}</td>
+      <td class="num">{{ row.total }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="11">No B2B credit/debit notes in this period.</td></tr>
+    {% endfor %}
+    <tr class="total">
+      <td colspan="10">Notes Total (reduces outward tax liability)</td>
+      <td class="num">{{ notes_total }}</td>
+    </tr>
+  </tbody>
+</table>
+
+<table class="erp-report" style="margin-top: 20px;">
+  <tbody>
+    <tr class="total">
+      <td>Net Outward Liability (B2B + B2C − Notes)</td>
+      <td class="num">{{ grand_total }}</td>
+    </tr>
+  </tbody>
+</table>
+{% endblock %}

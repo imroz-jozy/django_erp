@@ -1,0 +1,360 @@
+diff --git a/masters/admin.py b/masters/admin.py
+index c699817..6a5b317 100644
+--- a/masters/admin.py
++++ b/masters/admin.py
+@@ -966,7 +966,8 @@ class AccountAdmin(admin.ModelAdmin):
+ 
+ @admin.register(Unit)
+ class UnitAdmin(admin.ModelAdmin):
+-    list_display = ("name", "print_name", "decimal_places")
++    list_display = ("name", "print_name", "decimal_places", "no_quantity")
++    list_filter = ("no_quantity",)
+     search_fields = ("name", "print_name")
+ 
+ 
+@@ -1032,6 +1033,7 @@ class ItemAdmin(admin.ModelAdmin):
+     list_display = (
+         "item_name",
+         "item_group",
++        "item_type",
+         "hsn",
+         "main_unit",
+         "alt_unit",
+@@ -1041,10 +1043,39 @@ class ItemAdmin(admin.ModelAdmin):
+         "mrp",
+         "opening_main",
+         "opening_value",
++        "sale_account",
++        "purchase_account",
+     )
+     search_fields = ("item_name", "item_group", "hsn")
+-    list_filter = ("item_group", "main_unit")
+-    autocomplete_fields = ("main_unit", "alt_unit")
++    list_filter = ("item_type", "item_group", "main_unit")
++    autocomplete_fields = ("main_unit", "alt_unit", "sale_account", "purchase_account")
++    fieldsets = (
++        (None, {"fields": ("item_name", "item_group", "item_type")}),
++        (
++            "Unit & Stock",
++            {
++                "fields": ("main_unit", "alt_unit", "conversion"),
++                "description": (
++                    "Goods require a Main Unit. Services can use a real unit too (e.g. Hours, "
++                    "Job) for billing. Pick the 'N/A' unit on any item — Goods or Service — to "
++                    "stop it being tracked as stock in the stock/valuation reports."
++                ),
++            },
++        ),
++        ("Tax & Pricing", {"fields": ("hsn", "tax", "sale_price", "purchase_price", "mrp")}),
++        ("Opening Balance", {"fields": ("opening_main", "opening_value")}),
++        (
++            "Posting Accounts (optional override)",
++            {
++                "fields": ("sale_account", "purchase_account"),
++                "description": (
++                    "Leave blank to post this item to the Sale/Purchase Type's default ledger. "
++                    "Set an account here to post this specific item to a different ledger instead "
++                    "(e.g. a service item posted to an Income account rather than Sales)."
++                ),
++            },
++        ),
++    )
+ 
+ 
+ @admin.register(BillSundry)
+diff --git a/masters/models.py b/masters/models.py
+index 5050e0d..db61e9c 100644
+--- a/masters/models.py
++++ b/masters/models.py
+@@ -136,6 +136,15 @@ class Unit(models.Model):
+     name = models.CharField(max_length=50, unique=True)
+     print_name = models.CharField(max_length=50, blank=True)
+     decimal_places = models.PositiveSmallIntegerField(default=2)
++    no_quantity = models.BooleanField(
++        default=False,
++        verbose_name="N/A (No Quantity)",
++        help_text=(
++            "Mark this unit as 'N/A'. Items using it (goods or services) are billed with a "
++            "quantity/rate as usual, but are never tracked as stock and never appear in the "
++            "stock/valuation reports."
++        ),
++    )
+ 
+     class Meta:
+         ordering = ["name"]
+@@ -282,12 +291,29 @@ class PurchaseType(models.Model):
+ 
+ class Item(models.Model):
+ 
++    class ItemType(models.TextChoices):
++        GOODS = "GOODS", "Goods"
++        SERVICE = "SERVICE", "Service"
++
+     item_name = models.CharField(max_length=150, unique=True)
+     item_group = models.CharField(max_length=100, blank=True)
++    item_type = models.CharField(
++        max_length=10,
++        choices=ItemType.choices,
++        default=ItemType.GOODS,
++        help_text="Goods: physical product with stock tracking. Service: no stock or unit required.",
++    )
+     main_unit = models.ForeignKey(
+         Unit,
+         on_delete=models.PROTECT,
+         related_name="items_main",
++        null=True,
++        blank=True,
++        help_text=(
++            "Required for Goods (use the 'N/A' unit for goods you don't want stock-tracked). "
++            "Optional for Services — pick a real unit like Hours/Job for billing, or leave "
++            "blank / choose 'N/A' if quantity doesn't apply."
++        ),
+     )
+     alt_unit = models.ForeignKey(
+         Unit,
+@@ -295,6 +321,7 @@ class Item(models.Model):
+         null=True,
+         blank=True,
+         related_name="items_alt",
++        help_text="Optional alternate unit (Goods only).",
+     )
+     conversion = models.DecimalField(
+         max_digits=15,
+@@ -306,7 +333,7 @@ class Item(models.Model):
+         max_length=8,
+         blank=True,
+         validators=[HSN_VALIDATOR],
+-        help_text="HSN code, digits only (4, 6 or 8 digits).",
++        help_text="HSN / SAC code, digits only (4, 6 or 8 digits).",
+     )
+     tax = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+     sale_price = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+@@ -314,6 +341,22 @@ class Item(models.Model):
+     mrp = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+     opening_main = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+     opening_value = models.DecimalField(max_digits=15, decimal_places=2, default=0)
++    sale_account = models.ForeignKey(
++        Account,
++        on_delete=models.PROTECT,
++        null=True,
++        blank=True,
++        related_name="items_sale",
++        help_text="Sales ledger for this item. Leave blank to use voucher-level default.",
++    )
++    purchase_account = models.ForeignKey(
++        Account,
++        on_delete=models.PROTECT,
++        null=True,
++        blank=True,
++        related_name="items_purchase",
++        help_text="Purchase ledger for this item. Leave blank to use voucher-level default.",
++    )
+ 
+     class Meta:
+         ordering = ["item_name"]
+@@ -323,6 +366,24 @@ class Item(models.Model):
+     def __str__(self):
+         return self.item_name
+ 
++    @property
++    def is_service(self):
++        return self.item_type == self.ItemType.SERVICE
++
++    @property
++    def tracks_stock(self):
++        """Only Goods items whose Main Unit is a real (non-N/A) unit hold stock.
++
++        Services never hold stock. A unit marked N/A (no_quantity) also opts
++        any item out of stock/quantity tracking, whether it's a Service item
++        billed by "Hours"/"Job" or a Goods item that simply isn't stocked.
++        """
++        if self.item_type != self.ItemType.GOODS:
++            return False
++        if not self.main_unit_id:
++            return False
++        return not self.main_unit.no_quantity
++
+     def clean(self):
+         super().clean()
+         if self.item_name:
+@@ -332,6 +393,9 @@ class Item(models.Model):
+             if qs.exists():
+                 from django.core.exceptions import ValidationError
+                 raise ValidationError({"item_name": "Item with this name already exists (case-insensitive)."})
++        if self.item_type == self.ItemType.GOODS and not self.main_unit_id:
++            from django.core.exceptions import ValidationError
++            raise ValidationError({"main_unit": "Main Unit is required for Goods items."})
+ 
+     def save(self, *args, **kwargs):
+         self.full_clean()
+@@ -1112,6 +1176,13 @@ def seed_erp_defaults():
+                 print_name=unit_name,
+             )
+ 
++    na_unit = Unit.objects.filter(name__iexact="N/A").first()
++    if not na_unit:
++        Unit.objects.create(name="N/A", print_name="N/A", no_quantity=True)
++    elif not na_unit.no_quantity:
++        na_unit.no_quantity = True
++        na_unit.save(update_fields=["no_quantity"])
++
+     sales_acc = accounts["Sales"]
+     purchase_acc = accounts["Purchase"]
+     cgst_out = accounts["CGST Output"]
+diff --git a/masters/reports.py b/masters/reports.py
+index 5aaeccd..29bf295 100644
+--- a/masters/reports.py
++++ b/masters/reports.py
+@@ -80,7 +80,7 @@ def build_ledgers(date_from, date_to):
+             "sale_type__tax_account_2",
+         )
+         .prefetch_related(
+-            Prefetch("items", queryset=SaleItem.objects.select_related("item")),
++            Prefetch("items", queryset=SaleItem.objects.select_related("item", "item__sale_account")),
+             Prefetch(
+                 "bill_sundries",
+                 queryset=SaleBillSundry.objects.select_related("bill_sundry", "bill_sundry__posting_account_sale"),
+@@ -91,7 +91,9 @@ def build_ledgers(date_from, date_to):
+         totals = sale.totals()
+         _post(ledgers, sale.account, debit=totals["net_amount"])
+         sales_acc = sale.sale_type.sales_account if sale.sale_type_id else None
+-        _post(ledgers, sales_acc, credit=totals["item_amount"])
++        for line in sale.items.all():
++            line_acc = line.item.sale_account if (line.item_id and line.item.sale_account_id) else sales_acc
++            _post(ledgers, line_acc, credit=line.amount_after_discount)
+         if sale.sale_type_id and totals["tax_amount"]:
+             for tax_acc, tax_amt in sale.sale_type.tax_postings(totals["tax_amount"]):
+                 _post(ledgers, tax_acc, credit=tax_amt)
+@@ -112,7 +114,7 @@ def build_ledgers(date_from, date_to):
+             "purchase_type__tax_account_2",
+         )
+         .prefetch_related(
+-            Prefetch("items", queryset=PurchaseItem.objects.select_related("item")),
++            Prefetch("items", queryset=PurchaseItem.objects.select_related("item", "item__purchase_account")),
+             Prefetch(
+                 "bill_sundries",
+                 queryset=PurchaseBillSundry.objects.select_related(
+@@ -127,7 +129,11 @@ def build_ledgers(date_from, date_to):
+         purchase_acc = (
+             purchase.purchase_type.purchase_account if purchase.purchase_type_id else None
+         )
+-        _post(ledgers, purchase_acc, debit=totals["item_amount"])
++        for line in purchase.items.all():
++            line_acc = (
++                line.item.purchase_account if (line.item_id and line.item.purchase_account_id) else purchase_acc
++            )
++            _post(ledgers, line_acc, debit=line.amount_after_discount)
+         if purchase.purchase_type_id and totals["tax_amount"]:
+             for tax_acc, tax_amt in purchase.purchase_type.tax_postings(totals["tax_amount"]):
+                 _post(ledgers, tax_acc, debit=tax_amt)
+@@ -242,9 +248,17 @@ def stock_figures(date_from, date_to):
+ 
+     Closing value  = closing_qty × WAR
+     COGS (sale)    = sale_qty    × WAR
++
++    Service items, and any item whose Main Unit is marked 'N/A' (no_quantity),
++    carry no quantity and never hold stock, so they are excluded here entirely.
+     """
++    stock_items = Item.objects.filter(
++        item_type=Item.ItemType.GOODS, main_unit__isnull=False, main_unit__no_quantity=False
++    )
++    stock_item_ids = set(stock_items.values_list("id", flat=True))
++
+     opening_total = money(
+-        Item.objects.aggregate(total=Sum("opening_value"))["total"] or 0
++        stock_items.aggregate(total=Sum("opening_value"))["total"] or 0
+     )
+ 
+     # Accumulate period purchases per item
+@@ -253,7 +267,7 @@ def stock_figures(date_from, date_to):
+     purchase_value_total = ZERO
+ 
+     for line in PurchaseItem.objects.filter(
+-        purchase__date__gte=date_from, purchase__date__lte=date_to
++        purchase__date__gte=date_from, purchase__date__lte=date_to, item_id__in=stock_item_ids
+     ).select_related("item"):
+         purchase_qty[line.item_id] += money(line.quantity)
+         purchase_amt[line.item_id] += line.amount_after_discount
+@@ -262,7 +276,7 @@ def stock_figures(date_from, date_to):
+     # Accumulate period sales per item
+     sale_qty = defaultdict(lambda: ZERO)
+     for line in SaleItem.objects.filter(
+-        sale__date__gte=date_from, sale__date__lte=date_to
++        sale__date__gte=date_from, sale__date__lte=date_to, item_id__in=stock_item_ids
+     ).select_related("item"):
+         sale_qty[line.item_id] += money(line.quantity)
+ 
+@@ -270,7 +284,7 @@ def stock_figures(date_from, date_to):
+     closing_qty_value = ZERO
+     sale_cogs = ZERO
+ 
+-    for item in Item.objects.all():
++    for item in stock_items:
+         op_qty = money(item.opening_main)
+         op_val = money(item.opening_value)
+         pur_qty = purchase_qty[item.id]
+@@ -582,7 +596,7 @@ def _voucher_entries_for_account(account):
+         "sale_type__tax_account",
+         "sale_type__tax_account_2",
+     ).prefetch_related(
+-        Prefetch("items", queryset=SaleItem.objects.select_related("item")),
++        Prefetch("items", queryset=SaleItem.objects.select_related("item", "item__sale_account")),
+         Prefetch(
+             "bill_sundries",
+             queryset=SaleBillSundry.objects.select_related(
+@@ -597,10 +611,12 @@ def _voucher_entries_for_account(account):
+                 entries, sale.date, "Sale", sale.invoice_no, sale.narration, totals["net_amount"], 0
+             )
+         sales_acc = sale.sale_type.sales_account if sale.sale_type_id else None
+-        if sales_acc and sales_acc.id == acc_id:
+-            _append_entry(
+-                entries, sale.date, "Sale", sale.invoice_no, sale.narration, 0, totals["item_amount"]
+-            )
++        for line in sale.items.all():
++            line_acc = line.item.sale_account if (line.item_id and line.item.sale_account_id) else sales_acc
++            if line_acc and line_acc.id == acc_id:
++                _append_entry(
++                    entries, sale.date, "Sale", sale.invoice_no, sale.narration, 0, line.amount_after_discount
++                )
+         if sale.sale_type_id and totals["tax_amount"]:
+             for tax_acc, tax_amt in sale.sale_type.tax_postings(totals["tax_amount"]):
+                 if tax_acc and tax_acc.id == acc_id:
+@@ -625,7 +641,7 @@ def _voucher_entries_for_account(account):
+         "purchase_type__tax_account",
+         "purchase_type__tax_account_2",
+     ).prefetch_related(
+-        Prefetch("items", queryset=PurchaseItem.objects.select_related("item")),
++        Prefetch("items", queryset=PurchaseItem.objects.select_related("item", "item__purchase_account")),
+         Prefetch(
+             "bill_sundries",
+             queryset=PurchaseBillSundry.objects.select_related(
+@@ -648,16 +664,20 @@ def _voucher_entries_for_account(account):
+         purchase_acc = (
+             purchase.purchase_type.purchase_account if purchase.purchase_type_id else None
+         )
+-        if purchase_acc and purchase_acc.id == acc_id:
+-            _append_entry(
+-                entries,
+-                purchase.date,
+-                "Purchase",
+-                purchase.invoice_no,
+-                purchase.narration,
+-                totals["item_amount"],
+-                0,
++        for line in purchase.items.all():
++            line_acc = (
++                line.item.purchase_account if (line.item_id and line.item.purchase_account_id) else purchase_acc
+             )
++            if line_acc and line_acc.id == acc_id:
++                _append_entry(
++                    entries,
++                    purchase.date,
++                    "Purchase",
++                    purchase.invoice_no,
++                    purchase.narration,
++                    line.amount_after_discount,
++                    0,
++                )
+         if purchase.purchase_type_id and totals["tax_amount"]:
+             for tax_acc, tax_amt in purchase.purchase_type.tax_postings(totals["tax_amount"]):
+                 if tax_acc and tax_acc.id == acc_id:

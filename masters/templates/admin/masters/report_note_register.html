@@ -1,0 +1,32 @@
+{% extends "admin/masters/report_base.html" %}
+
+{% block report_body %}
+<table class="erp-report">
+  <thead>
+    <tr>
+      <th>Date</th>
+      <th>Voucher No</th>
+      <th>{{ party_label }}</th>
+      <th>Reason line(s)</th>
+      <th class="num">Total</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for note in rows %}
+    <tr>
+      <td>{{ note.date }}</td>
+      <td>{{ note.voucher_no }}</td>
+      <td>{{ note.account }}</td>
+      <td>{{ note.lines_summary }}</td>
+      <td class="num">{{ note.total_amount }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="5">No vouchers in this period.</td></tr>
+    {% endfor %}
+    <tr class="total">
+      <td colspan="4">Total</td>
+      <td class="num">{{ total }}</td>
+    </tr>
+  </tbody>
+</table>
+{% endblock %}

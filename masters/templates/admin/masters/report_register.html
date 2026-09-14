@@ -18,7 +18,7 @@
     {% for row in rows %}
     <tr>
       <td>{{ row.voucher.date }}</td>
-      <td>{{ row.voucher.invoice_no }}</td>
+      <td>{% firstof row.voucher.invoice_no row.voucher.voucher_no %}</td>
       <td>{% firstof row.voucher.sale_type row.voucher.purchase_type %}</td>
       <td>{{ row.voucher.account }}</td>
       <td class="num">{{ row.totals.item_basic_amount }}</td>

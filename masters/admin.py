@@ -1,3 +1,5 @@
+from datetime import date
+
 from django.contrib import admin, messages
 from django.core.exceptions import ValidationError
 from django import forms
@@ -6,12 +8,18 @@ from django.http import HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
-from django.utils.html import format_html
+from django.utils.html import format_html, format_html_join
 
 from .models import (
     Account,
     AccountGroup,
     BillSundry,
+    CompanyProfile,
+    CreditNote,
+    CreditNoteLine,
+    DebitNote,
+    DebitNoteLine,
+    GST_RATE_CHOICES,
     Item,
     Journal,
     JournalLine,
@@ -20,12 +28,18 @@ from .models import (
     Purchase,
     PurchaseBillSundry,
     PurchaseItem,
+    PurchaseReturn,
+    PurchaseReturnBillSundry,
+    PurchaseReturnItem,
     PurchaseType,
     Receipt,
     ReceiptLine,
     Sale,
     SaleBillSundry,
     SaleItem,
+    SaleReturn,
+    SaleReturnBillSundry,
+    SaleReturnItem,
     SaleType,
     Unit,
 )
@@ -53,12 +67,18 @@ from .excel_service import (
 from .reports import (
     account_ledger,
     balance_sheet,
+    credit_note_register,
+    debit_note_register,
+    gst_outward_summary,
+    hsn_summary,
     journal_register,
     payment_register,
     period_from_request,
     profit_loss,
     purchase_register,
+    purchase_return_register,
     receipt_register,
+    sale_return_register,
     sales_register,
     stock_figures,
     trial_balance,
@@ -80,6 +100,89 @@ def _report_context(request, title, extra):
     }
     ctx.update(extra)
     return ctx
+
+
+# =========================================================
+# DASHBOARD
+# =========================================================
+# Everything below only *reads* figures that are already produced by the
+# tested functions in reports.py (sales_register, purchase_register,
+# trial_balance, stock_figures, ...). Nothing here changes how an amount,
+# tax split, or ledger posting is computed — it only arranges existing
+# numbers for the admin home page.
+
+_DASHBOARD_SINCE = date(2000, 1, 1)
+
+
+def _erp_dashboard_context(request):
+    today = date.today()
+    month_start = today.replace(day=1)
+
+    try:
+        sale_rows, sale_total = sales_register(month_start, today)
+        purchase_rows, purchase_total = purchase_register(month_start, today)
+        payment_rows, payment_total = payment_register(month_start, today)
+        receipt_rows, receipt_total = receipt_register(month_start, today)
+
+        balance_rows, _, _ = trial_balance(_DASHBOARD_SINCE, today)
+
+        def _group_balance(*names):
+            return money(
+                sum((r["balance"] for r in balance_rows if r["group"].name in names), ZERO)
+            )
+
+        cash_bank_balance = _group_balance("Cash-in-hand", "Bank Accounts")
+        receivable_total = _group_balance("Sundry Debtors")
+        payable_total = money(-_group_balance("Sundry Creditors"))
+
+        stock = stock_figures(_DASHBOARD_SINCE, today)
+        low_stock_rows = [r for r in stock["rows"] if r["closing_qty"] <= 0][:8]
+
+        recent_sales = list(
+            Sale.objects.select_related("account").order_by("-date", "-id")[:6]
+        )
+        recent_purchases = list(
+            Purchase.objects.select_related("account").order_by("-date", "-id")[:6]
+        )
+    except Exception:
+        # The dashboard must never break the admin home page — if a report
+        # helper errors out (e.g. before default accounts are seeded on a
+        # brand new database) just show an empty dashboard instead.
+        return {
+            "erp_dashboard": None,
+        }
+
+    return {
+        "erp_dashboard": {
+            "today": today,
+            "month_start": month_start,
+            "sale_month_total": sale_total,
+            "sale_month_count": len(sale_rows),
+            "purchase_month_total": purchase_total,
+            "purchase_month_count": len(purchase_rows),
+            "payment_month_total": payment_total,
+            "receipt_month_total": receipt_total,
+            "cash_bank_balance": cash_bank_balance,
+            "receivable_total": receivable_total,
+            "payable_total": payable_total,
+            "closing_stock_value": stock["closing_stock"],
+            "low_stock_rows": low_stock_rows,
+            "recent_sales": recent_sales,
+            "recent_purchases": recent_purchases,
+        }
+    }
+
+
+if not getattr(admin.site, "_erp_index_patched", False):
+    _original_admin_index = admin.site.index
+
+    def _erp_dashboard_index(request, extra_context=None):
+        ctx = dict(extra_context or {})
+        ctx.update(_erp_dashboard_context(request))
+        return _original_admin_index(request, extra_context=ctx)
+
+    admin.site.index = _erp_dashboard_index
+    admin.site._erp_index_patched = True
 
 
 def profit_loss_view(request):
@@ -193,6 +296,82 @@ def journal_register_view(request):
             "Journal Register",
             {"rows": rows, "total": total},
         ),
+    )
+
+
+def sale_return_register_view(request):
+    date_from, date_to = period_from_request(request)
+    rows, total = sale_return_register(date_from, date_to)
+    return TemplateResponse(
+        request,
+        "admin/masters/report_register.html",
+        _report_context(
+            request,
+            "Sale Return Register",
+            {"rows": rows, "total": total, "party_label": "Customer"},
+        ),
+    )
+
+
+def purchase_return_register_view(request):
+    date_from, date_to = period_from_request(request)
+    rows, total = purchase_return_register(date_from, date_to)
+    return TemplateResponse(
+        request,
+        "admin/masters/report_register.html",
+        _report_context(
+            request,
+            "Purchase Return Register",
+            {"rows": rows, "total": total, "party_label": "Supplier"},
+        ),
+    )
+
+
+def credit_note_register_view(request):
+    date_from, date_to = period_from_request(request)
+    rows, total = credit_note_register(date_from, date_to)
+    return TemplateResponse(
+        request,
+        "admin/masters/report_note_register.html",
+        _report_context(
+            request,
+            "Credit Note Register",
+            {"rows": rows, "total": total, "party_label": "Customer"},
+        ),
+    )
+
+
+def debit_note_register_view(request):
+    date_from, date_to = period_from_request(request)
+    rows, total = debit_note_register(date_from, date_to)
+    return TemplateResponse(
+        request,
+        "admin/masters/report_note_register.html",
+        _report_context(
+            request,
+            "Debit Note Register",
+            {"rows": rows, "total": total, "party_label": "Supplier"},
+        ),
+    )
+
+
+def hsn_summary_view(request):
+    date_from, date_to = period_from_request(request)
+    data = hsn_summary(date_from, date_to)
+    return TemplateResponse(
+        request,
+        "admin/masters/report_hsn_summary.html",
+        _report_context(request, "HSN/SAC Summary (GSTR-1 Table 12)", data),
+    )
+
+
+def gst_outward_summary_view(request):
+    date_from, date_to = period_from_request(request)
+    data = gst_outward_summary(date_from, date_to)
+    return TemplateResponse(
+        request,
+        "admin/masters/report_gst_outward.html",
+        _report_context(request, "GST Outward Supply Summary (GSTR-1)", data),
     )
 
 
@@ -672,6 +851,36 @@ if not getattr(admin.site, "_erp_urls_patched", False):
                 name="erp_journal_register",
             ),
             path(
+                "reports/sale-return-register/",
+                admin.site.admin_view(sale_return_register_view),
+                name="erp_sale_return_register",
+            ),
+            path(
+                "reports/purchase-return-register/",
+                admin.site.admin_view(purchase_return_register_view),
+                name="erp_purchase_return_register",
+            ),
+            path(
+                "reports/credit-note-register/",
+                admin.site.admin_view(credit_note_register_view),
+                name="erp_credit_note_register",
+            ),
+            path(
+                "reports/debit-note-register/",
+                admin.site.admin_view(debit_note_register_view),
+                name="erp_debit_note_register",
+            ),
+            path(
+                "reports/hsn-summary/",
+                admin.site.admin_view(hsn_summary_view),
+                name="erp_hsn_summary",
+            ),
+            path(
+                "reports/gst-outward-summary/",
+                admin.site.admin_view(gst_outward_summary_view),
+                name="erp_gst_outward_summary",
+            ),
+            path(
                 "reports/stock-summary/",
                 admin.site.admin_view(stock_summary_view),
                 name="erp_stock_summary",
@@ -807,6 +1016,56 @@ class PurchaseBillSundryInline(admin.TabularInline):
     autocomplete_fields = ("bill_sundry",)
 
 
+class SaleReturnItemInline(admin.TabularInline):
+    model = SaleReturnItem
+    extra = 1
+    autocomplete_fields = ("item", "unit")
+    readonly_fields = ("basic_amount", "amount_after_discount", "tax_amount", "net_amount")
+    fields = (
+        "item",
+        "unit",
+        "quantity",
+        "rate",
+        "discount",
+        "tax",
+        "basic_amount",
+        "amount_after_discount",
+        "tax_amount",
+        "net_amount",
+    )
+
+
+class SaleReturnBillSundryInline(admin.TabularInline):
+    model = SaleReturnBillSundry
+    extra = 1
+    autocomplete_fields = ("bill_sundry",)
+
+
+class PurchaseReturnItemInline(admin.TabularInline):
+    model = PurchaseReturnItem
+    extra = 1
+    autocomplete_fields = ("item", "unit")
+    readonly_fields = ("basic_amount", "amount_after_discount", "tax_amount", "net_amount")
+    fields = (
+        "item",
+        "unit",
+        "quantity",
+        "rate",
+        "discount",
+        "tax",
+        "basic_amount",
+        "amount_after_discount",
+        "tax_amount",
+        "net_amount",
+    )
+
+
+class PurchaseReturnBillSundryInline(admin.TabularInline):
+    model = PurchaseReturnBillSundry
+    extra = 1
+    autocomplete_fields = ("bill_sundry",)
+
+
 class JournalLineForm(forms.ModelForm):
     class Meta:
         model = JournalLine
@@ -905,12 +1164,12 @@ class CashVoucherLineFormSet(BaseInlineFormSet):
             if not account and amount == 0:
                 continue
             if not account:
-                raise ValidationError("Each payment or receipt line needs an account.")
+                raise ValidationError("Each line needs an account.")
             if amount <= 0:
-                raise ValidationError("Each payment or receipt amount must be greater than zero.")
+                raise ValidationError("Each line amount must be greater than zero.")
             filled += 1
         if not filled:
-            raise ValidationError("Enter at least one payment or receipt line.")
+            raise ValidationError("Enter at least one line.")
 
 
 class PaymentLineInline(admin.TabularInline):
@@ -929,6 +1188,52 @@ class ReceiptLineInline(admin.TabularInline):
     formset = CashVoucherLineFormSet
     autocomplete_fields = ("account",)
     fields = ("account", "amount")
+
+
+class CreditNoteLineInline(admin.TabularInline):
+    model = CreditNoteLine
+    extra = 3
+    min_num = 1
+    formset = CashVoucherLineFormSet
+    autocomplete_fields = ("account",)
+    fields = ("account", "amount")
+    verbose_name = "Reason line"
+    verbose_name_plural = "Reason lines (debited)"
+
+
+class DebitNoteLineInline(admin.TabularInline):
+    model = DebitNoteLine
+    extra = 3
+    min_num = 1
+    formset = CashVoucherLineFormSet
+    autocomplete_fields = ("account",)
+    fields = ("account", "amount")
+    verbose_name = "Reason line"
+    verbose_name_plural = "Reason lines (credited)"
+
+
+@admin.register(CompanyProfile)
+class CompanyProfileAdmin(admin.ModelAdmin):
+    """Singleton: always pk=1. Redirects 'Add' to the existing instance's
+    change page (or creates it once, silently) and hides Delete/Add-another
+    so there's never more than one row to get confused by."""
+
+    fields = ("legal_name", "trade_name", "gstin", "state", "address")
+
+    def has_add_permission(self, request):
+        return not CompanyProfile.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def changelist_view(self, request, extra_context=None):
+        obj = CompanyProfile.get_solo()
+        if obj:
+            return redirect("admin:masters_companyprofile_change", obj.pk)
+        return redirect("admin:masters_companyprofile_add")
+
+    def response_add(self, request, obj, post_url_continue=None):
+        return redirect("admin:masters_companyprofile_change", obj.pk)
 
 
 @admin.register(AccountGroup)
@@ -966,7 +1271,8 @@ class AccountAdmin(admin.ModelAdmin):
 
 @admin.register(Unit)
 class UnitAdmin(admin.ModelAdmin):
-    list_display = ("name", "print_name", "decimal_places")
+    list_display = ("name", "print_name", "decimal_places", "no_quantity")
+    list_filter = ("no_quantity",)
     search_fields = ("name", "print_name")
 
 
@@ -974,17 +1280,30 @@ class UnitAdmin(admin.ModelAdmin):
 class SaleTypeAdmin(admin.ModelAdmin):
     list_display = (
         "name",
+        "is_interstate",
         "sales_account",
+        "sales_return_account",
         "tax_account",
         "tax_account_2",
         "tax_split_percent",
         "affect_stock",
         "tax_inclusive",
     )
+    list_filter = ("is_interstate", "affect_stock")
     search_fields = ("name",)
-    autocomplete_fields = ("sales_account", "tax_account", "tax_account_2")
+    autocomplete_fields = ("sales_account", "sales_return_account", "tax_account", "tax_account_2")
     fieldsets = (
-        (None, {"fields": ("name", "sales_account", "affect_stock", "tax_inclusive")}),
+        (
+            None,
+            {
+                "fields": ("name", "is_interstate", "sales_account", "sales_return_account", "affect_stock", "tax_inclusive"),
+                "description": (
+                    "Tick 'Is Interstate' for IGST-posting types. Sale/Purchase vouchers use this "
+                    "flag (compared against the party's state vs your Company Profile state) to "
+                    "auto-suggest the right type when none is chosen explicitly."
+                ),
+            },
+        ),
         (
             "Tax posting",
             {
@@ -1002,17 +1321,43 @@ class SaleTypeAdmin(admin.ModelAdmin):
 class PurchaseTypeAdmin(admin.ModelAdmin):
     list_display = (
         "name",
+        "is_interstate",
         "purchase_account",
+        "purchase_return_account",
         "tax_account",
         "tax_account_2",
         "tax_split_percent",
         "affect_stock",
         "tax_inclusive",
     )
+    list_filter = ("is_interstate", "affect_stock")
     search_fields = ("name",)
-    autocomplete_fields = ("purchase_account", "tax_account", "tax_account_2")
+    autocomplete_fields = (
+        "purchase_account",
+        "purchase_return_account",
+        "tax_account",
+        "tax_account_2",
+        "rcm_payable_account",
+    )
     fieldsets = (
-        (None, {"fields": ("name", "purchase_account", "affect_stock", "tax_inclusive")}),
+        (
+            None,
+            {
+                "fields": (
+                    "name",
+                    "is_interstate",
+                    "purchase_account",
+                    "purchase_return_account",
+                    "affect_stock",
+                    "tax_inclusive",
+                ),
+                "description": (
+                    "Tick 'Is Interstate' for IGST-posting types. Sale/Purchase vouchers use this "
+                    "flag (compared against the party's state vs your Company Profile state) to "
+                    "auto-suggest the right type when none is chosen explicitly."
+                ),
+            },
+        ),
         (
             "Tax posting",
             {
@@ -1023,28 +1368,106 @@ class PurchaseTypeAdmin(admin.ModelAdmin):
                 ),
             },
         ),
+        (
+            "Reverse Charge (RCM)",
+            {
+                "fields": ("rcm_payable_account",),
+                "description": (
+                    "Only needed for purchases marked 'Reverse Charge applicable'. When ticked on "
+                    "a Purchase, GST is self-assessed: the supplier is credited net-of-tax, this "
+                    "account is credited with the tax as a payable, and the normal Input tax "
+                    "accounts above are still debited as your input credit."
+                ),
+            },
+        ),
     )
+
+
+class GSTRateWidget(forms.NumberInput):
+    """Suggests the standard GST rate slabs via an HTML5 datalist, without
+    restricting the field to only those values — existing items with a
+    non-standard rate keep saving and displaying exactly as before."""
+
+    def __init__(self, attrs=None):
+        default_attrs = {"step": "0.01", "list": "gst-rate-choices"}
+        if attrs:
+            default_attrs.update(attrs)
+        super().__init__(default_attrs)
+
+    def render(self, name, value, attrs=None, renderer=None):
+        input_html = super().render(name, value, attrs, renderer)
+        options = format_html_join(
+            "", "<option value=\"{}\">{}</option>", ((v, label) for v, label in GST_RATE_CHOICES)
+        )
+        return format_html(
+            '{}<datalist id="gst-rate-choices">{}</datalist>', input_html, options
+        )
+
+
+class ItemAdminForm(forms.ModelForm):
+    class Meta:
+        model = Item
+        fields = "__all__"
+        widgets = {"tax": GSTRateWidget()}
 
 
 @admin.register(Item)
 class ItemAdmin(admin.ModelAdmin):
     change_list_template = "admin/masters/item/change_list.html"
+    form = ItemAdminForm
     list_display = (
         "item_name",
         "item_group",
+        "item_type",
         "hsn",
         "main_unit",
         "alt_unit",
         "tax",
+        "cess_rate",
         "sale_price",
         "purchase_price",
         "mrp",
         "opening_main",
         "opening_value",
+        "sale_account",
+        "purchase_account",
     )
     search_fields = ("item_name", "item_group", "hsn")
-    list_filter = ("item_group", "main_unit")
-    autocomplete_fields = ("main_unit", "alt_unit")
+    list_filter = ("item_type", "item_group", "main_unit")
+    autocomplete_fields = ("main_unit", "alt_unit", "sale_account", "purchase_account")
+    fieldsets = (
+        (None, {"fields": ("item_name", "item_group", "item_type")}),
+        (
+            "Unit & Stock",
+            {
+                "fields": ("main_unit", "alt_unit", "conversion"),
+                "description": (
+                    "Goods require a Main Unit. Services can use a real unit too (e.g. Hours, "
+                    "Job) for billing. Pick the 'N/A' unit on any item — Goods or Service — to "
+                    "stop it being tracked as stock in the stock/valuation reports."
+                ),
+            },
+        ),
+        (
+            "Tax & Pricing",
+            {
+                "fields": ("hsn", "tax", "cess_rate", "sale_price", "purchase_price", "mrp"),
+                "description": "Tax % shows standard GST slabs as suggestions but accepts any rate. Cess only applies to notified goods (tobacco, aerated drinks, luxury cars, coal, etc).",
+            },
+        ),
+        ("Opening Balance", {"fields": ("opening_main", "opening_value")}),
+        (
+            "Posting Accounts (optional override)",
+            {
+                "fields": ("sale_account", "purchase_account"),
+                "description": (
+                    "Leave blank to post this item to the Sale/Purchase Type's default ledger. "
+                    "Set an account here to post this specific item to a different ledger instead "
+                    "(e.g. a service item posted to an Income account rather than Sales)."
+                ),
+            },
+        ),
+    )
 
 
 @admin.register(BillSundry)
@@ -1137,7 +1560,7 @@ class SaleAdmin(VoucherAdminMixin, admin.ModelAdmin):
     autocomplete_fields = ("account", "sale_type")
     inlines = [SaleItemInline, SaleBillSundryInline]
     fieldsets = (
-        (None, {"fields": ("date", "invoice_no", "sale_type", "account", "narration")}),
+        (None, {"fields": ("date", "invoice_no", "sale_type", "account", "narration"), "classes": ("erp-voucher-header",)}),
         (
             "Totals",
             {
@@ -1148,7 +1571,8 @@ class SaleAdmin(VoucherAdminMixin, admin.ModelAdmin):
                     "tax_amount",
                     "sundry_amount",
                     "net_amount",
-                )
+                ),
+                "classes": ("erp-totals-box",),
             },
         ),
     )
@@ -1164,15 +1588,18 @@ class SaleAdmin(VoucherAdminMixin, admin.ModelAdmin):
 @admin.register(Purchase)
 class PurchaseAdmin(VoucherAdminMixin, admin.ModelAdmin):
     change_list_template = "admin/masters/purchase/change_list.html"
-    list_display = ("invoice_no", "date", "purchase_type", "account", "net_amount_list")
+    list_display = ("invoice_no", "date", "purchase_type", "account", "is_reverse_charge", "net_amount_list")
     search_fields = ("invoice_no", "account__account_name")
-    list_filter = ("date", "purchase_type")
+    list_filter = ("date", "purchase_type", "is_reverse_charge")
     autocomplete_fields = ("account", "purchase_type")
     inlines = [PurchaseItemInline, PurchaseBillSundryInline]
     fieldsets = (
         (
             None,
-            {"fields": ("date", "invoice_no", "purchase_type", "account", "narration")},
+            {
+                "fields": ("date", "invoice_no", "purchase_type", "account", "is_reverse_charge", "narration"),
+                "classes": ("erp-voucher-header",),
+            },
         ),
         (
             "Totals",
@@ -1184,7 +1611,86 @@ class PurchaseAdmin(VoucherAdminMixin, admin.ModelAdmin):
                     "tax_amount",
                     "sundry_amount",
                     "net_amount",
-                )
+                ),
+                "classes": ("erp-totals-box",),
+            },
+        ),
+    )
+
+    class Media:
+        js = ("masters/js/voucher_helper.js",)
+
+    @admin.display(description="Net")
+    def net_amount_list(self, obj):
+        return obj.net_amount
+
+
+@admin.register(SaleReturn)
+class SaleReturnAdmin(VoucherAdminMixin, admin.ModelAdmin):
+    list_display = ("voucher_no", "date", "sale_type", "account", "against_sale", "net_amount_list")
+    search_fields = ("voucher_no", "account__account_name", "against_sale__invoice_no")
+    list_filter = ("date", "sale_type")
+    autocomplete_fields = ("account", "sale_type", "against_sale")
+    inlines = [SaleReturnItemInline, SaleReturnBillSundryInline]
+    fieldsets = (
+        (
+            None,
+            {
+                "fields": ("date", "voucher_no", "sale_type", "account", "against_sale", "narration"),
+                "classes": ("erp-voucher-header",),
+            },
+        ),
+        (
+            "Totals",
+            {
+                "fields": (
+                    "item_basic_amount",
+                    "item_discount_amount",
+                    "item_amount",
+                    "tax_amount",
+                    "sundry_amount",
+                    "net_amount",
+                ),
+                "classes": ("erp-totals-box",),
+            },
+        ),
+    )
+
+    class Media:
+        js = ("masters/js/voucher_helper.js",)
+
+    @admin.display(description="Net")
+    def net_amount_list(self, obj):
+        return obj.net_amount
+
+
+@admin.register(PurchaseReturn)
+class PurchaseReturnAdmin(VoucherAdminMixin, admin.ModelAdmin):
+    list_display = ("voucher_no", "date", "purchase_type", "account", "against_purchase", "net_amount_list")
+    search_fields = ("voucher_no", "account__account_name", "against_purchase__invoice_no")
+    list_filter = ("date", "purchase_type")
+    autocomplete_fields = ("account", "purchase_type", "against_purchase")
+    inlines = [PurchaseReturnItemInline, PurchaseReturnBillSundryInline]
+    fieldsets = (
+        (
+            None,
+            {
+                "fields": ("date", "voucher_no", "purchase_type", "account", "against_purchase", "narration"),
+                "classes": ("erp-voucher-header",),
+            },
+        ),
+        (
+            "Totals",
+            {
+                "fields": (
+                    "item_basic_amount",
+                    "item_discount_amount",
+                    "item_amount",
+                    "tax_amount",
+                    "sundry_amount",
+                    "net_amount",
+                ),
+                "classes": ("erp-totals-box",),
             },
         ),
     )
@@ -1207,7 +1713,8 @@ class CashVoucherAdmin(admin.ModelAdmin):
     autocomplete_fields = ("through",)
     readonly_fields = ("total_amount",)
     fieldsets = (
-        (None, {"fields": ("date", "voucher_no", "through", "narration", "total_amount")}),
+        (None, {"fields": ("date", "voucher_no", "through", "narration"), "classes": ("erp-voucher-header",)}),
+        ("Total", {"fields": ("total_amount",), "classes": ("erp-totals-box",)}),
     )
 
     @admin.display(description="Parties")
@@ -1238,6 +1745,58 @@ class ReceiptAdmin(CashVoucherAdmin):
     inlines = [ReceiptLineInline]
 
 
+class PartyNoteAdmin(admin.ModelAdmin):
+    """Shared shape for CreditNote/DebitNote: one party account in the
+    header, readonly total, and a lines_summary column for the changelist.
+    Deliberately NOT a subclass of CashVoucherAdmin: that mixin restricts
+    its single header account to Cash/Bank ledgers (via 'through'), which
+    is wrong here — CreditNote/DebitNote's header account is a customer or
+    supplier (Sundry Debtors/Creditors), not cash or bank."""
+
+    list_display = ("voucher_no", "date", "account", "lines_display", "total_amount_list")
+    search_fields = ("voucher_no", "account__account_name", "narration")
+    list_filter = ("date",)
+    autocomplete_fields = ("account",)
+    readonly_fields = ("total_amount",)
+
+    @admin.display(description="Reason lines")
+    def lines_display(self, obj):
+        return obj.lines_summary()
+
+    @admin.display(description="Total")
+    def total_amount_list(self, obj):
+        return obj.total_amount
+
+
+@admin.register(CreditNote)
+class CreditNoteAdmin(PartyNoteAdmin):
+    autocomplete_fields = ("account", "against_sale")
+    inlines = [CreditNoteLineInline]
+    fieldsets = (
+        (
+            None,
+            {"fields": ("date", "voucher_no", "account", "against_sale", "narration"), "classes": ("erp-voucher-header",)},
+        ),
+        ("Total", {"fields": ("total_amount",), "classes": ("erp-totals-box",)}),
+    )
+
+
+@admin.register(DebitNote)
+class DebitNoteAdmin(PartyNoteAdmin):
+    autocomplete_fields = ("account", "against_purchase")
+    inlines = [DebitNoteLineInline]
+    fieldsets = (
+        (
+            None,
+            {
+                "fields": ("date", "voucher_no", "account", "against_purchase", "narration"),
+                "classes": ("erp-voucher-header",),
+            },
+        ),
+        ("Total", {"fields": ("total_amount",), "classes": ("erp-totals-box",)}),
+    )
+
+
 @admin.register(Journal)
 class JournalAdmin(admin.ModelAdmin):
     change_list_template = "admin/masters/journal/change_list.html"
@@ -1253,12 +1812,13 @@ class JournalAdmin(admin.ModelAdmin):
     inlines = [JournalLineInline]
     readonly_fields = ("total_debit", "total_credit", "difference")
     fieldsets = (
-        (None, {"fields": ("date", "voucher_no", "narration")}),
+        (None, {"fields": ("date", "voucher_no", "narration"), "classes": ("erp-voucher-header",)}),
         (
             "Totals",
             {
                 "fields": ("total_debit", "total_credit", "difference"),
                 "description": "Debit and credit must be equal or the voucher will not save.",
+                "classes": ("erp-totals-box",),
             },
         ),
     )

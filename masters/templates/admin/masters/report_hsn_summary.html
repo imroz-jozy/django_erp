@@ -1,0 +1,44 @@
+{% extends "admin/masters/report_base.html" %}
+
+{% block report_body %}
+<p style="color: var(--body-quiet-color, #666); margin: 0 0 12px;">
+  Outward supplies (Sales, net of Sale Returns) grouped by HSN/SAC code and tax rate —
+  matches GSTR-1 Table 12 layout.
+</p>
+<table class="erp-report">
+  <thead>
+    <tr>
+      <th>HSN/SAC</th>
+      <th class="num">Rate %</th>
+      <th class="num">Qty</th>
+      <th class="num">Taxable Value</th>
+      <th class="num">CGST</th>
+      <th class="num">SGST</th>
+      <th class="num">IGST</th>
+      <th class="num">Cess</th>
+      <th class="num">Total</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.hsn }}</td>
+      <td class="num">{{ row.rate }}</td>
+      <td class="num">{{ row.quantity }}</td>
+      <td class="num">{{ row.taxable }}</td>
+      <td class="num">{{ row.cgst }}</td>
+      <td class="num">{{ row.sgst }}</td>
+      <td class="num">{{ row.igst }}</td>
+      <td class="num">{{ row.cess }}</td>
+      <td class="num">{{ row.total }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="9">No outward supplies in this period.</td></tr>
+    {% endfor %}
+    <tr class="total">
+      <td colspan="8">Grand Total</td>
+      <td class="num">{{ grand_total }}</td>
+    </tr>
+  </tbody>
+</table>
+{% endblock %}

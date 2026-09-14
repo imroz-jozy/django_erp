@@ -7,7 +7,43 @@ from django.dispatch import receiver
 
 from .money import ZERO, money
 
-HSN_VALIDATOR = RegexValidator(r"^\d*$", "HSN must contain digits only.")
+HSN_VALIDATOR = RegexValidator(r"^(\d{4}|\d{6}|\d{8})$", "HSN/SAC must be 4, 6, or 8 digits.")
+
+GSTIN_VALIDATOR = RegexValidator(
+    r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$",
+    "Enter a valid 15-character GSTIN (e.g. 27ABCDE1234F1Z5).",
+)
+
+# GST state codes (as per CBIC), used for the state dropdown and to
+# cross-check a GSTIN's embedded state code against the selected state.
+GST_STATE_CODES = [
+    ("01", "Jammu and Kashmir"), ("02", "Himachal Pradesh"), ("03", "Punjab"),
+    ("04", "Chandigarh"), ("05", "Uttarakhand"), ("06", "Haryana"), ("07", "Delhi"),
+    ("08", "Rajasthan"), ("09", "Uttar Pradesh"), ("10", "Bihar"), ("11", "Sikkim"),
+    ("12", "Arunachal Pradesh"), ("13", "Nagaland"), ("14", "Manipur"), ("15", "Mizoram"),
+    ("16", "Tripura"), ("17", "Meghalaya"), ("18", "Assam"), ("19", "West Bengal"),
+    ("20", "Jharkhand"), ("21", "Odisha"), ("22", "Chhattisgarh"), ("23", "Madhya Pradesh"),
+    ("24", "Gujarat"), ("26", "Dadra and Nagar Haveli and Daman and Diu"),
+    ("27", "Maharashtra"), ("28", "Andhra Pradesh (Old)"), ("29", "Karnataka"),
+    ("30", "Goa"), ("31", "Lakshadweep"), ("32", "Kerala"), ("33", "Tamil Nadu"),
+    ("34", "Puducherry"), ("35", "Andaman and Nicobar Islands"), ("36", "Telangana"),
+    ("37", "Andhra Pradesh"), ("38", "Ladakh"), ("97", "Other Territory"),
+]
+GST_STATE_CHOICES = [(name, name) for _code, name in GST_STATE_CODES]
+GST_STATE_CODE_BY_NAME = {name: code for code, name in GST_STATE_CODES}
+
+# Standard GST rate slabs. Used only as suggested choices in the admin
+# widget (ItemAdminForm) — the underlying field stays a free DecimalField
+# so existing items with a non-standard rate keep working untouched.
+GST_RATE_CHOICES = [
+    (Decimal("0"), "0%"),
+    (Decimal("0.25"), "0.25%"),
+    (Decimal("3"), "3%"),
+    (Decimal("5"), "5%"),
+    (Decimal("12"), "12%"),
+    (Decimal("18"), "18%"),
+    (Decimal("28"), "28%"),
+]
 
 
 # =========================================================
@@ -89,8 +125,13 @@ class Account(models.Model):
         default=OpeningType.DR,
     )
     address = models.TextField(blank=True)
-    state = models.CharField(max_length=100, blank=True)
-    gst = models.CharField(max_length=20, blank=True)
+    state = models.CharField(max_length=50, choices=GST_STATE_CHOICES, blank=True)
+    gst = models.CharField(
+        max_length=15,
+        blank=True,
+        validators=[GSTIN_VALIDATOR],
+        verbose_name="GSTIN",
+    )
     is_registered = models.BooleanField(
         default=False,
         verbose_name="Registered",
@@ -115,6 +156,18 @@ class Account(models.Model):
             if qs.exists():
                 from django.core.exceptions import ValidationError
                 raise ValidationError({"account_name": "Account with this name already exists (case-insensitive)."})
+        if self.gst and self.state:
+            expected_code = GST_STATE_CODE_BY_NAME.get(self.state)
+            if expected_code and self.gst[:2] != expected_code:
+                from django.core.exceptions import ValidationError
+                raise ValidationError(
+                    {
+                        "gst": (
+                            f"GSTIN state code ({self.gst[:2]}) doesn't match the selected "
+                            f"state ({self.state} = {expected_code})."
+                        )
+                    }
+                )
 
     def save(self, *args, **kwargs):
         self.full_clean()
@@ -128,6 +181,65 @@ class Account(models.Model):
 
 
 # =========================================================
+# COMPANY PROFILE (own GSTIN/state — singleton)
+# =========================================================
+
+class CompanyProfile(models.Model):
+    """Your own business's GST identity. A singleton: always pk=1.
+
+    Used to auto-detect whether a Sale/Purchase is Local (intrastate) or
+    Interstate by comparing the party's state to this state — only when
+    the voucher's Sale/Purchase Type hasn't been chosen explicitly.
+    """
+
+    legal_name = models.CharField(max_length=200, blank=True)
+    trade_name = models.CharField(max_length=200, blank=True)
+    gstin = models.CharField(
+        max_length=15,
+        blank=True,
+        validators=[GSTIN_VALIDATOR],
+        verbose_name="GSTIN",
+    )
+    state = models.CharField(max_length=50, choices=GST_STATE_CHOICES, blank=True)
+    address = models.TextField(blank=True)
+
+    class Meta:
+        verbose_name = "Company Profile"
+        verbose_name_plural = "Company Profile"
+
+    def __str__(self):
+        return self.legal_name or self.trade_name or "Company Profile"
+
+    def clean(self):
+        super().clean()
+        if self.gstin and self.state:
+            expected_code = GST_STATE_CODE_BY_NAME.get(self.state)
+            if expected_code and self.gstin[:2] != expected_code:
+                from django.core.exceptions import ValidationError
+                raise ValidationError(
+                    {
+                        "gstin": (
+                            f"GSTIN state code ({self.gstin[:2]}) doesn't match the selected "
+                            f"state ({self.state} = {expected_code})."
+                        )
+                    }
+                )
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        pass  # singleton: never actually delete the row
+
+    @classmethod
+    def get_solo(cls):
+        obj = cls.objects.filter(pk=1).first()
+        return obj
+
+
+# =========================================================
 # UNIT
 # =========================================================
 
@@ -136,6 +248,15 @@ class Unit(models.Model):
     name = models.CharField(max_length=50, unique=True)
     print_name = models.CharField(max_length=50, blank=True)
     decimal_places = models.PositiveSmallIntegerField(default=2)
+    no_quantity = models.BooleanField(
+        default=False,
+        verbose_name="N/A (No Quantity)",
+        help_text=(
+            "Mark this unit as 'N/A'. Items using it (goods or services) are billed with a "
+            "quantity/rate as usual, but are never tracked as stock and never appear in the "
+            "stock/valuation reports."
+        ),
+    )
 
     class Meta:
         ordering = ["name"]
@@ -217,6 +338,22 @@ class SaleType(models.Model):
     )
     affect_stock = models.BooleanField(default=True)
     tax_inclusive = models.BooleanField(default=False)
+    is_interstate = models.BooleanField(
+        default=False,
+        help_text=(
+            "Tick for Interstate Sale Types (posts IGST). Leave unticked for Local "
+            "(posts CGST+SGST). Used to auto-suggest a Sale Type when the party's "
+            "state differs from your Company Profile state."
+        ),
+    )
+    sales_return_account = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="sale_types_return",
+        help_text="Ledger for Sale Returns / Credit Notes against this sale type. Leave blank to reuse the Sales Account above.",
+    )
 
     class Meta:
         ordering = ["name"]
@@ -228,6 +365,10 @@ class SaleType(models.Model):
 
     def tax_postings(self, tax_amount):
         return tax_split_postings(self, tax_amount)
+
+    @property
+    def effective_sales_return_account(self):
+        return self.sales_return_account or self.sales_account
 
 
 class PurchaseType(models.Model):
@@ -263,6 +404,33 @@ class PurchaseType(models.Model):
     )
     affect_stock = models.BooleanField(default=True)
     tax_inclusive = models.BooleanField(default=False)
+    is_interstate = models.BooleanField(
+        default=False,
+        help_text=(
+            "Tick for Interstate Purchase Types (posts IGST). Leave unticked for Local "
+            "(posts CGST+SGST). Used to auto-suggest a Purchase Type when the party's "
+            "state differs from your Company Profile state."
+        ),
+    )
+    purchase_return_account = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="purchase_types_return",
+        help_text="Ledger for Purchase Returns / Debit Notes against this purchase type. Leave blank to reuse the Purchase Account above.",
+    )
+    rcm_payable_account = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="purchase_types_rcm",
+        help_text=(
+            "GST Payable (Reverse Charge) liability ledger. Required only for purchases "
+            "marked 'Reverse Charge applicable'. Leave blank if you never use RCM."
+        ),
+    )
 
     class Meta:
         ordering = ["name"]
@@ -275,6 +443,10 @@ class PurchaseType(models.Model):
     def tax_postings(self, tax_amount):
         return tax_split_postings(self, tax_amount)
 
+    @property
+    def effective_purchase_return_account(self):
+        return self.purchase_return_account or self.purchase_account
+
 
 # =========================================================
 # ITEM
@@ -282,12 +454,29 @@ class PurchaseType(models.Model):
 
 class Item(models.Model):
 
+    class ItemType(models.TextChoices):
+        GOODS = "GOODS", "Goods"
+        SERVICE = "SERVICE", "Service"
+
     item_name = models.CharField(max_length=150, unique=True)
     item_group = models.CharField(max_length=100, blank=True)
+    item_type = models.CharField(
+        max_length=10,
+        choices=ItemType.choices,
+        default=ItemType.GOODS,
+        help_text="Goods: physical product with stock tracking. Service: no stock or unit required.",
+    )
     main_unit = models.ForeignKey(
         Unit,
         on_delete=models.PROTECT,
         related_name="items_main",
+        null=True,
+        blank=True,
+        help_text=(
+            "Required for Goods (use the 'N/A' unit for goods you don't want stock-tracked). "
+            "Optional for Services — pick a real unit like Hours/Job for billing, or leave "
+            "blank / choose 'N/A' if quantity doesn't apply."
+        ),
     )
     alt_unit = models.ForeignKey(
         Unit,
@@ -295,6 +484,7 @@ class Item(models.Model):
         null=True,
         blank=True,
         related_name="items_alt",
+        help_text="Optional alternate unit (Goods only).",
     )
     conversion = models.DecimalField(
         max_digits=15,
@@ -306,14 +496,41 @@ class Item(models.Model):
         max_length=8,
         blank=True,
         validators=[HSN_VALIDATOR],
-        help_text="HSN code, digits only (4, 6 or 8 digits).",
+        help_text="HSN / SAC code, digits only (4, 6 or 8 digits).",
     )
-    tax = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    tax = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        help_text="GST rate %. Standard slabs: 0, 0.25, 3, 5, 12, 18, 28.",
+    )
+    cess_rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        help_text="GST Compensation Cess %, if applicable (tobacco, luxury cars, aerated drinks, etc). Leave 0 if not applicable.",
+    )
     sale_price = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     purchase_price = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     mrp = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     opening_main = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     opening_value = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    sale_account = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="items_sale",
+        help_text="Sales ledger for this item. Leave blank to use voucher-level default.",
+    )
+    purchase_account = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="items_purchase",
+        help_text="Purchase ledger for this item. Leave blank to use voucher-level default.",
+    )
 
     class Meta:
         ordering = ["item_name"]
@@ -322,6 +539,24 @@ class Item(models.Model):
 
     def __str__(self):
         return self.item_name
+
+    @property
+    def is_service(self):
+        return self.item_type == self.ItemType.SERVICE
+
+    @property
+    def tracks_stock(self):
+        """Only Goods items whose Main Unit is a real (non-N/A) unit hold stock.
+
+        Services never hold stock. A unit marked N/A (no_quantity) also opts
+        any item out of stock/quantity tracking, whether it's a Service item
+        billed by "Hours"/"Job" or a Goods item that simply isn't stocked.
+        """
+        if self.item_type != self.ItemType.GOODS:
+            return False
+        if not self.main_unit_id:
+            return False
+        return not self.main_unit.no_quantity
 
     def clean(self):
         super().clean()
@@ -332,6 +567,9 @@ class Item(models.Model):
             if qs.exists():
                 from django.core.exceptions import ValidationError
                 raise ValidationError({"item_name": "Item with this name already exists (case-insensitive)."})
+        if self.item_type == self.ItemType.GOODS and not self.main_unit_id:
+            from django.core.exceptions import ValidationError
+            raise ValidationError({"main_unit": "Main Unit is required for Goods items."})
 
     def save(self, *args, **kwargs):
         self.full_clean()
@@ -507,6 +745,60 @@ def voucher_totals(item_lines, sundry_lines):
     return bases
 
 
+def _guess_voucher_type_name(account_id, local_name, interstate_name):
+    """Suggest Local vs Interstate by comparing the party's state to the
+    company's own state. Used only as a DEFAULT when no type has been
+    chosen explicitly — if Company Profile isn't set up (or either state
+    is blank), this always falls back to `local_name`, exactly matching
+    the previous fixed-default behaviour.
+    """
+    if account_id:
+        company = CompanyProfile.get_solo()
+        if company and company.state:
+            account_state = (
+                Account.objects.filter(pk=account_id).values_list("state", flat=True).first()
+            )
+            if account_state and account_state != company.state:
+                return interstate_name
+    return local_name
+
+
+def _guess_sale_type(account_id):
+    """Same auto-detection as _guess_voucher_type_name, but matches by the
+    is_interstate flag rather than a hardcoded type name — so it still
+    works if 'Local Sale'/'Interstate Sale' get renamed or if there are
+    several Sale Types per side (e.g. multiple interstate rate slabs).
+    Falls back to the 'Local Sale' by-name lookup for old setups."""
+    is_interstate = False
+    if account_id:
+        company = CompanyProfile.get_solo()
+        if company and company.state:
+            account_state = (
+                Account.objects.filter(pk=account_id).values_list("state", flat=True).first()
+            )
+            is_interstate = bool(account_state and account_state != company.state)
+    match = SaleType.objects.filter(is_interstate=is_interstate).first()
+    if match:
+        return match
+    return SaleType.objects.filter(name="Local Sale").first()
+
+
+def _guess_purchase_type(account_id):
+    """Purchase-side counterpart of _guess_sale_type."""
+    is_interstate = False
+    if account_id:
+        company = CompanyProfile.get_solo()
+        if company and company.state:
+            account_state = (
+                Account.objects.filter(pk=account_id).values_list("state", flat=True).first()
+            )
+            is_interstate = bool(account_state and account_state != company.state)
+    match = PurchaseType.objects.filter(is_interstate=is_interstate).first()
+    if match:
+        return match
+    return PurchaseType.objects.filter(name="Local Purchase").first()
+
+
 # =========================================================
 # SALE
 # =========================================================
@@ -539,7 +831,7 @@ class Sale(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.sale_type_id:
-            default_type = SaleType.objects.filter(name="Local Sale").first()
+            default_type = _guess_sale_type(self.account_id)
             if default_type:
                 self.sale_type = default_type
         super().save(*args, **kwargs)
@@ -626,6 +918,17 @@ class Purchase(models.Model):
         on_delete=models.PROTECT,
         related_name="purchases",
     )
+    is_reverse_charge = models.BooleanField(
+        default=False,
+        verbose_name="Reverse Charge applicable (RCM)",
+        help_text=(
+            "Tick if GST on this purchase is payable by you under Reverse Charge "
+            "(e.g. unregistered supplier, notified goods/services). The supplier is "
+            "then credited only the taxable value; the GST is self-assessed as both "
+            "an input credit and a payable liability. Requires the Purchase Type's "
+            "'RCM payable account' to be set."
+        ),
+    )
     narration = models.TextField(blank=True)
 
     class Meta:
@@ -638,7 +941,7 @@ class Purchase(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.purchase_type_id:
-            default_type = PurchaseType.objects.filter(name="Local Purchase").first()
+            default_type = _guess_purchase_type(self.account_id)
             if default_type:
                 self.purchase_type = default_type
         super().save(*args, **kwargs)
@@ -920,6 +1223,376 @@ class JournalLine(models.Model):
 
 
 # =========================================================
+# SALE RETURN (mirrors Sale, reversed posting)
+# =========================================================
+
+class SaleReturn(models.Model):
+    """Goods returned by a customer. Same shape as Sale; postings reverse
+    Sale's Dr/Cr direction (Dr Sales Return, Cr Party)."""
+
+    date = models.DateField()
+    voucher_no = models.CharField(max_length=50, blank=True)
+    sale_type = models.ForeignKey(
+        SaleType,
+        on_delete=models.PROTECT,
+        related_name="sale_returns",
+        null=True,
+        blank=True,
+        help_text="Reused from Sale Types. Determines the Sales Return and tax ledgers.",
+    )
+    account = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        related_name="sale_returns",
+        help_text="Customer account (credited).",
+    )
+    against_sale = models.ForeignKey(
+        Sale,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="returns",
+        help_text="Optional: the original invoice this return is against.",
+    )
+    narration = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+        verbose_name = "Sale Return"
+        verbose_name_plural = "Sale Returns"
+
+    def __str__(self):
+        return self.voucher_no or f"Sale Return {self.pk}"
+
+    def save(self, *args, **kwargs):
+        if not self.voucher_no:
+            self.voucher_no = _next_voucher_no(SaleReturn, "SR-")
+        if not self.sale_type_id:
+            default_type = _guess_sale_type(self.account_id)
+            if default_type:
+                self.sale_type = default_type
+        super().save(*args, **kwargs)
+
+    def totals(self):
+        return voucher_totals(list(self.items.all()), list(self.bill_sundries.all()))
+
+    @property
+    def item_basic_amount(self):
+        return self.totals()["item_basic_amount"]
+
+    @property
+    def net_amount(self):
+        return self.totals()["net_amount"]
+
+
+class SaleReturnItem(ItemLineMixin):
+
+    sale_return = models.ForeignKey(SaleReturn, on_delete=models.CASCADE, related_name="items")
+    item = models.ForeignKey(Item, on_delete=models.PROTECT, related_name="sale_return_items")
+    unit = models.ForeignKey(
+        Unit,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="sale_return_items",
+    )
+
+    class Meta:
+        verbose_name = "Sale Return Item"
+        verbose_name_plural = "Sale Return Items"
+
+    def __str__(self):
+        return f"{self.sale_return.voucher_no} - {self.item.item_name}"
+
+    def save(self, *args, **kwargs):
+        if self.item_id and self.tax == 0:
+            self.tax = self.item.tax
+        if self.item_id and not self.unit_id:
+            self.unit = self.item.main_unit
+        super().save(*args, **kwargs)
+
+
+class SaleReturnBillSundry(models.Model):
+
+    sale_return = models.ForeignKey(
+        SaleReturn,
+        on_delete=models.CASCADE,
+        related_name="bill_sundries",
+    )
+    bill_sundry = models.ForeignKey(BillSundry, on_delete=models.PROTECT)
+    amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=0,
+        help_text="Leave 0 to auto-calculate from bill sundry formula.",
+    )
+
+    class Meta:
+        verbose_name = "Sale Return Bill Sundry"
+        verbose_name_plural = "Sale Return Bill Sundries"
+
+    def __str__(self):
+        return f"{self.sale_return.voucher_no} - {self.bill_sundry.name}"
+
+
+# =========================================================
+# PURCHASE RETURN (mirrors Purchase, reversed posting)
+# =========================================================
+
+class PurchaseReturn(models.Model):
+    """Goods returned to a supplier. Same shape as Purchase; postings
+    reverse Purchase's Dr/Cr direction (Cr Purchase Return, Dr Party)."""
+
+    date = models.DateField()
+    voucher_no = models.CharField(max_length=50, blank=True)
+    purchase_type = models.ForeignKey(
+        PurchaseType,
+        on_delete=models.PROTECT,
+        related_name="purchase_returns",
+        null=True,
+        blank=True,
+        help_text="Reused from Purchase Types. Determines the Purchase Return and tax ledgers.",
+    )
+    account = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        related_name="purchase_returns",
+        help_text="Supplier account (debited).",
+    )
+    against_purchase = models.ForeignKey(
+        Purchase,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="returns",
+        help_text="Optional: the original invoice this return is against.",
+    )
+    narration = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+        verbose_name = "Purchase Return"
+        verbose_name_plural = "Purchase Returns"
+
+    def __str__(self):
+        return self.voucher_no or f"Purchase Return {self.pk}"
+
+    def save(self, *args, **kwargs):
+        if not self.voucher_no:
+            self.voucher_no = _next_voucher_no(PurchaseReturn, "PR-")
+        if not self.purchase_type_id:
+            default_type = _guess_purchase_type(self.account_id)
+            if default_type:
+                self.purchase_type = default_type
+        super().save(*args, **kwargs)
+
+    def totals(self):
+        return voucher_totals(list(self.items.all()), list(self.bill_sundries.all()))
+
+    @property
+    def item_basic_amount(self):
+        return self.totals()["item_basic_amount"]
+
+    @property
+    def net_amount(self):
+        return self.totals()["net_amount"]
+
+
+class PurchaseReturnItem(ItemLineMixin):
+
+    purchase_return = models.ForeignKey(PurchaseReturn, on_delete=models.CASCADE, related_name="items")
+    item = models.ForeignKey(Item, on_delete=models.PROTECT, related_name="purchase_return_items")
+    unit = models.ForeignKey(
+        Unit,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="purchase_return_items",
+    )
+
+    class Meta:
+        verbose_name = "Purchase Return Item"
+        verbose_name_plural = "Purchase Return Items"
+
+    def __str__(self):
+        return f"{self.purchase_return.voucher_no} - {self.item.item_name}"
+
+    def save(self, *args, **kwargs):
+        if self.item_id and self.tax == 0:
+            self.tax = self.item.tax
+        if self.item_id and not self.unit_id:
+            self.unit = self.item.main_unit
+        super().save(*args, **kwargs)
+
+
+class PurchaseReturnBillSundry(models.Model):
+
+    purchase_return = models.ForeignKey(
+        PurchaseReturn,
+        on_delete=models.CASCADE,
+        related_name="bill_sundries",
+    )
+    bill_sundry = models.ForeignKey(BillSundry, on_delete=models.PROTECT)
+    amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=0,
+        help_text="Leave 0 to auto-calculate from bill sundry formula.",
+    )
+
+    class Meta:
+        verbose_name = "Purchase Return Bill Sundry"
+        verbose_name_plural = "Purchase Return Bill Sundries"
+
+    def __str__(self):
+        return f"{self.purchase_return.voucher_no} - {self.bill_sundry.name}"
+
+
+# =========================================================
+# CREDIT NOTE (shape mirrors Payment: one party credited,
+# multiple reason/expense ledgers debited)
+# =========================================================
+
+class CreditNote(models.Model):
+    """Reduces what a customer owes you, without necessarily involving
+    returned goods (e.g. price adjustment, rate difference, discount
+    given after billing, disputed amount written off)."""
+
+    date = models.DateField()
+    voucher_no = models.CharField(max_length=50, blank=True)
+    account = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        related_name="credit_notes",
+        help_text="Customer / party account being credited (reduces what they owe you).",
+    )
+    against_sale = models.ForeignKey(
+        Sale,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="credit_notes",
+        help_text="Optional: the original invoice this note relates to.",
+    )
+    narration = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+        verbose_name = "Credit Note"
+        verbose_name_plural = "Credit Notes"
+
+    def __str__(self):
+        return self.voucher_no or f"Credit Note {self.pk}"
+
+    def save(self, *args, **kwargs):
+        if not self.voucher_no:
+            self.voucher_no = _next_voucher_no(CreditNote, "CN-")
+        super().save(*args, **kwargs)
+
+    @property
+    def total_amount(self):
+        return money(sum((line.amount for line in self.lines.all()), ZERO))
+
+    def lines_summary(self):
+        return ", ".join(
+            f"{line.account.account_name} ({line.amount:,.2f})"
+            for line in self.lines.select_related("account")
+        )
+
+
+class CreditNoteLine(models.Model):
+    """Reason ledger debited (e.g. Sales Return, Discount Allowed)."""
+
+    credit_note = models.ForeignKey(CreditNote, on_delete=models.CASCADE, related_name="lines")
+    account = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        related_name="credit_note_lines",
+        help_text="Reason ledger debited by this note (e.g. Sales Return, Discount Allowed).",
+    )
+    amount = models.DecimalField(max_digits=15, decimal_places=2)
+
+    class Meta:
+        verbose_name = "Credit Note Line"
+        verbose_name_plural = "Credit Note Lines"
+
+    def __str__(self):
+        return f"{self.credit_note.voucher_no} - {self.account}"
+
+
+# =========================================================
+# DEBIT NOTE (shape mirrors Receipt: one party debited,
+# multiple reason/income ledgers credited)
+# =========================================================
+
+class DebitNote(models.Model):
+    """Reduces what you owe a supplier, without necessarily involving
+    returned goods (e.g. price adjustment, rate difference, discount
+    claimed after billing, shortage deduction)."""
+
+    date = models.DateField()
+    voucher_no = models.CharField(max_length=50, blank=True)
+    account = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        related_name="debit_notes",
+        help_text="Supplier / party account being debited (reduces what you owe them).",
+    )
+    against_purchase = models.ForeignKey(
+        Purchase,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="debit_notes",
+        help_text="Optional: the original invoice this note relates to.",
+    )
+    narration = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+        verbose_name = "Debit Note"
+        verbose_name_plural = "Debit Notes"
+
+    def __str__(self):
+        return self.voucher_no or f"Debit Note {self.pk}"
+
+    def save(self, *args, **kwargs):
+        if not self.voucher_no:
+            self.voucher_no = _next_voucher_no(DebitNote, "DN-")
+        super().save(*args, **kwargs)
+
+    @property
+    def total_amount(self):
+        return money(sum((line.amount for line in self.lines.all()), ZERO))
+
+    def lines_summary(self):
+        return ", ".join(
+            f"{line.account.account_name} ({line.amount:,.2f})"
+            for line in self.lines.select_related("account")
+        )
+
+
+class DebitNoteLine(models.Model):
+    """Reason ledger credited (e.g. Purchase Return, Discount Received)."""
+
+    debit_note = models.ForeignKey(DebitNote, on_delete=models.CASCADE, related_name="lines")
+    account = models.ForeignKey(
+        Account,
+        on_delete=models.PROTECT,
+        related_name="debit_note_lines",
+        help_text="Reason ledger credited by this note (e.g. Purchase Return, Discount Received).",
+    )
+    amount = models.DecimalField(max_digits=15, decimal_places=2)
+
+    class Meta:
+        verbose_name = "Debit Note Line"
+        verbose_name_plural = "Debit Note Lines"
+
+    def __str__(self):
+        return f"{self.debit_note.voucher_no} - {self.account}"
+
+
+# =========================================================
 # DEFAULT MASTERS (Busy / Tally style)
 # =========================================================
 
@@ -1005,10 +1678,12 @@ DEFAULT_ACCOUNTS = [
     ("Printing & Stationery", "Expenses (Indirect/Admn.)"),
     ("Profit & Loss", "Profit & Loss"),
     ("Purchase", "Purchase"),
+    ("Purchase Return", "Purchase"),
     ("Rounded Off", "Expenses (Indirect/Admn.)"),
     ("Salary", "Expenses (Indirect/Admn.)"),
     ("Salary & Bonus Payable", "Provisions/Expenses Payable"),
     ("Sales", "Sale"),
+    ("Sales Return", "Sale"),
     ("Sales Promotion Expenses", "Expenses (Indirect/Admn.)"),
     ("Service Charges Paid", "Expenses (Indirect/Admn.)"),
     ("Service Charges Receipts", "Income (Indirect)"),
@@ -1112,8 +1787,17 @@ def seed_erp_defaults():
                 print_name=unit_name,
             )
 
+    na_unit = Unit.objects.filter(name__iexact="N/A").first()
+    if not na_unit:
+        Unit.objects.create(name="N/A", print_name="N/A", no_quantity=True)
+    elif not na_unit.no_quantity:
+        na_unit.no_quantity = True
+        na_unit.save(update_fields=["no_quantity"])
+
     sales_acc = accounts["Sales"]
+    sales_return_acc = accounts["Sales Return"]
     purchase_acc = accounts["Purchase"]
+    purchase_return_acc = accounts["Purchase Return"]
     cgst_out = accounts["CGST Output"]
     sgst_out = accounts["SGST Output"]
     igst_out = accounts["IGST Output"]
@@ -1127,16 +1811,20 @@ def seed_erp_defaults():
         local_sale = SaleType.objects.create(
             name="Local Sale",
             sales_account=sales_acc,
+            sales_return_account=sales_return_acc,
             tax_account=cgst_out,
             tax_account_2=sgst_out,
             tax_split_percent=half,
             affect_stock=True,
+            is_interstate=False,
         )
     else:
         local_sale.sales_account = sales_acc
+        local_sale.sales_return_account = sales_return_acc
         local_sale.tax_account = cgst_out
         local_sale.tax_account_2 = sgst_out
         local_sale.tax_split_percent = half
+        local_sale.is_interstate = False
         local_sale.save()
 
     inter_sale = SaleType.objects.filter(name__iexact="Interstate Sale").first()
@@ -1144,15 +1832,19 @@ def seed_erp_defaults():
         inter_sale = SaleType.objects.create(
             name="Interstate Sale",
             sales_account=sales_acc,
+            sales_return_account=sales_return_acc,
             tax_account=igst_out,
             tax_account_2=None,
             tax_split_percent=half,
             affect_stock=True,
+            is_interstate=True,
         )
     else:
         inter_sale.sales_account = sales_acc
+        inter_sale.sales_return_account = sales_return_acc
         inter_sale.tax_account = igst_out
         inter_sale.tax_account_2 = None
+        inter_sale.is_interstate = True
         inter_sale.save()
 
     local_pur = PurchaseType.objects.filter(name__iexact="Local Purchase").first()
@@ -1160,16 +1852,20 @@ def seed_erp_defaults():
         local_pur = PurchaseType.objects.create(
             name="Local Purchase",
             purchase_account=purchase_acc,
+            purchase_return_account=purchase_return_acc,
             tax_account=cgst_in,
             tax_account_2=sgst_in,
             tax_split_percent=half,
             affect_stock=True,
+            is_interstate=False,
         )
     else:
         local_pur.purchase_account = purchase_acc
+        local_pur.purchase_return_account = purchase_return_acc
         local_pur.tax_account = cgst_in
         local_pur.tax_account_2 = sgst_in
         local_pur.tax_split_percent = half
+        local_pur.is_interstate = False
         local_pur.save()
 
     inter_pur = PurchaseType.objects.filter(name__iexact="Interstate Purchase").first()
@@ -1177,15 +1873,19 @@ def seed_erp_defaults():
         inter_pur = PurchaseType.objects.create(
             name="Interstate Purchase",
             purchase_account=purchase_acc,
+            purchase_return_account=purchase_return_acc,
             tax_account=igst_in,
             tax_account_2=None,
             tax_split_percent=half,
             affect_stock=True,
+            is_interstate=True,
         )
     else:
         inter_pur.purchase_account = purchase_acc
+        inter_pur.purchase_return_account = purchase_return_acc
         inter_pur.tax_account = igst_in
         inter_pur.tax_account_2 = None
+        inter_pur.is_interstate = True
         inter_pur.save()
 
     sundries = [

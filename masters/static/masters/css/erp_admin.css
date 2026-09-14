@@ -1,0 +1,629 @@
+/* =========================================================
+   ERP Admin — visual design system.
+   Presentation / layout ONLY. No accounting, tax, stock or
+   posting calculation lives here or is affected by this file.
+
+   Subject: Indian small-business billing & bookkeeping.
+   Principle: colour follows real ledger convention — debit /
+   dues in red ink, credit / income in teal-black ink, one
+   gold accent spent only on primary actions and hero figures.
+   Money and voucher numbers set in a monospace face so digits
+   line up in columns, the way they must on a printed invoice.
+   ========================================================= */
+
+/* ---------- Fonts (self-hosted — works without internet) ---------- */
+@font-face {
+  font-family: "Plex Sans";
+  src: url("../fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Plex Sans";
+  src: url("../fonts/ibm-plex-sans-latin-500-normal.woff2") format("woff2");
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Plex Sans";
+  src: url("../fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2");
+  font-weight: 600; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Plex Sans";
+  src: url("../fonts/ibm-plex-sans-latin-700-normal.woff2") format("woff2");
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Plex Mono";
+  src: url("../fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Plex Mono";
+  src: url("../fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2");
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Plex Mono";
+  src: url("../fonts/ibm-plex-mono-latin-600-normal.woff2") format("woff2");
+  font-weight: 600; font-style: normal; font-display: swap;
+}
+
+/* ---------- Design tokens: reskin Django's own variables ----------
+   Overriding Django's existing custom properties re-themes buttons,
+   links, headers and hairlines everywhere for free, with no need to
+   fight individual selectors. Applied for light, dark and default so
+   the brand look stays consistent regardless of OS / toggle state. */
+:root,
+html[data-theme="light"],
+html[data-theme="dark"] {
+  --erp-ink-900: #14213D;
+  --erp-ink-700: #2B3A55;
+  --erp-ink-500: #5B6B85;
+  --erp-paper-0: #FFFFFF;
+  --erp-paper-50: #EEF1F5;
+  --erp-line: #DDE3EA;
+  --erp-line-strong: #C3CCD8;
+  --erp-credit: #0E6E5B;
+  --erp-credit-bg: #E7F4F0;
+  --erp-debit: #A23636;
+  --erp-debit-bg: #FBEAEA;
+  --erp-gold: #A6741F;
+  --erp-gold-bg: #F7EEDC;
+
+  --primary: var(--erp-ink-900);
+  --secondary: var(--erp-ink-700);
+  --accent: var(--erp-gold);
+  --primary-fg: #fff;
+
+  --body-fg: var(--erp-ink-900);
+  --body-bg: var(--erp-paper-50);
+  --body-quiet-color: var(--erp-ink-500);
+  --body-medium-color: var(--erp-ink-700);
+  --body-loud-color: var(--erp-ink-900);
+
+  --header-color: #fff;
+  --header-branding-color: #fff;
+  --header-bg: var(--erp-ink-900);
+  --header-link-color: #fff;
+
+  --breadcrumbs-fg: #C7D0E0;
+  --breadcrumbs-link-fg: #fff;
+  --breadcrumbs-bg: var(--erp-ink-700);
+
+  --link-fg: var(--erp-ink-700);
+  --link-hover-color: var(--erp-gold);
+  --link-selected-fg: var(--erp-gold);
+
+  --hairline-color: var(--erp-line);
+  --border-color: var(--erp-line-strong);
+
+  --error-fg: var(--erp-debit);
+
+  --message-success-bg: var(--erp-credit-bg);
+  --message-warning-bg: var(--erp-gold-bg);
+  --message-error-bg: var(--erp-debit-bg);
+
+  --darkened-bg: var(--erp-paper-50);
+  --selected-bg: #F1EBD9;
+  --selected-row: #FBF6E9;
+
+  --button-fg: #fff;
+  --button-bg: var(--erp-ink-700);
+  --button-hover-bg: var(--erp-ink-900);
+  --default-button-bg: var(--erp-gold);
+  --default-button-hover-bg: #8C611A;
+  --close-button-bg: #6b7686;
+  --close-button-hover-bg: var(--erp-ink-700);
+  --delete-button-bg: var(--erp-debit);
+  --delete-button-hover-bg: #832727;
+
+  --object-tools-fg: #fff;
+  --object-tools-bg: var(--erp-ink-700);
+  --object-tools-hover-bg: var(--erp-ink-900);
+
+  --font-family-primary: "Plex Sans", "Segoe UI", system-ui, Roboto, Arial, sans-serif;
+  --font-family-monospace: "Plex Mono", ui-monospace, "Cascadia Mono", "Roboto Mono", monospace;
+
+  color-scheme: light;
+}
+
+/* Hide the light/dark toggle: one consistent branded theme */
+.theme-toggle { display: none !important; }
+
+/* ---------- Base typography & surfaces ---------- */
+body { letter-spacing: 0; }
+#header { box-shadow: 0 1px 0 rgba(0,0,0,.08); }
+#branding h1, #branding a:link, #branding a:visited { font-weight: 700; letter-spacing: .01em; }
+#branding::before {
+  content: "◧";
+  display: inline-block;
+  margin-right: 8px;
+  color: var(--erp-gold);
+  font-size: 18px;
+}
+div.breadcrumbs { font-size: 12.5px; }
+
+.module h2, .module caption, .inline-group h2 {
+  background: var(--erp-ink-900);
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+
+a:link, a:visited { color: var(--link-fg); }
+a:focus, a:hover { color: var(--link-hover-color); }
+
+.button, input[type=submit], input[type=button], .submit-row input, a.button {
+  border-radius: 6px;
+  font-weight: 600;
+  letter-spacing: .01em;
+  box-shadow: none;
+  text-transform: none;
+}
+.button.default, input[type=submit].default, .submit-row input.default {
+  background: var(--erp-gold);
+  color: #2b1f0a;
+}
+.button.default:hover, input[type=submit].default:hover { background: #8C611A; color: #fff; }
+
+.object-tools a.addlink::before { background-color: transparent; }
+
+/* Cards / modules: crisp hairline border, modest radius, no soft blur */
+.module {
+  border: 1px solid var(--erp-line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--erp-paper-0);
+}
+.module h2, .module caption { padding: 8px 12px; }
+
+fieldset.module { margin-bottom: 16px; }
+
+/* ---------- Sidebar navigation ---------- */
+#nav-sidebar.erp-nav {
+  background: var(--erp-ink-900);
+  color: #C7D0E0;
+  padding: 10px 0 20px;
+  border: none;
+}
+.erp-nav .erp-nav-group { padding: 4px 0 10px; border-bottom: 1px solid rgba(255,255,255,.08); margin-bottom: 6px; }
+.erp-nav .erp-nav-group:last-of-type { border-bottom: none; }
+.erp-nav-heading {
+  font-size: 11px;
+  font-weight: 600;
+  color: #8494B0;
+  padding: 8px 16px 6px;
+  letter-spacing: .03em;
+}
+.erp-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  color: #D7DEEA;
+  text-decoration: none;
+  font-size: 13.5px;
+  border-left: 3px solid transparent;
+  transition: background-color .12s ease;
+}
+.erp-nav-link:link, .erp-nav-link:visited { color: #D7DEEA; }
+.erp-nav-link:hover { background: rgba(255,255,255,.06); color: #fff; }
+.erp-nav-link.is-active {
+  background: rgba(166,116,31,.16);
+  border-left-color: var(--erp-gold);
+  color: #fff;
+  font-weight: 600;
+}
+.erp-nav-top { font-size: 14.5px; font-weight: 600; }
+.erp-nav-icon { flex: 0 0 auto; width: 17px; height: 17px; opacity: .9; }
+.erp-nav-link.erp-accent-credit .erp-nav-icon { color: #5FCBAE; }
+.erp-nav-link.erp-accent-debit .erp-nav-icon { color: #E39696; }
+
+#nav-filter {
+  display: block;
+  width: calc(100% - 32px);
+  margin: 8px 16px;
+  background: rgba(255,255,255,.08);
+  border: 1px solid rgba(255,255,255,.12);
+  color: #fff;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+#nav-filter::placeholder { color: #8494B0; }
+
+.erp-nav-all { padding-top: 4px; }
+.erp-nav-all .erp-nav-heading { padding-top: 4px; }
+#nav-sidebar.erp-nav .module { background: transparent; border: none; }
+#nav-sidebar.erp-nav .module th, #nav-sidebar.erp-nav .module caption { background: transparent; }
+#nav-sidebar.erp-nav .module th a, #nav-sidebar.erp-nav .module caption a { color: #D7DEEA; font-size: 13px; }
+#nav-sidebar.erp-nav .module caption { color: #8494B0; font-size: 11px; text-transform: none; }
+#nav-sidebar.erp-nav .current-model { background: rgba(166,116,31,.16); }
+
+/* ---------- Dashboard ---------- */
+.erp-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 22px;
+}
+.erp-quick-actions a.button {
+  background: var(--erp-paper-0);
+  color: var(--erp-ink-900);
+  border: 1px solid var(--erp-line-strong);
+  font-weight: 600;
+}
+.erp-quick-actions a.button:hover { border-color: var(--erp-gold); color: var(--erp-gold); }
+.erp-quick-actions a.button.erp-primary-action {
+  background: var(--erp-gold);
+  color: #2b1f0a;
+  border-color: var(--erp-gold);
+}
+.erp-quick-actions a.button.erp-primary-action:hover { background: #8C611A; color: #fff; }
+
+.erp-hero {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 22px;
+}
+.erp-hero-card {
+  background: var(--erp-ink-900);
+  color: #fff;
+  border-radius: 10px;
+  padding: 20px 22px;
+}
+.erp-hero-card .erp-hero-label { font-size: 12.5px; color: #A9B6CC; margin-bottom: 8px; }
+.erp-hero-card .erp-hero-value {
+  font-family: var(--font-family-monospace);
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1;
+  border-bottom: 3px solid var(--erp-gold);
+  display: inline-block;
+  padding-bottom: 8px;
+}
+.erp-hero-card .erp-hero-sub { font-size: 12px; color: #A9B6CC; margin-top: 10px; }
+
+.erp-stat-stack { display: flex; flex-direction: column; gap: 14px; }
+.erp-stat {
+  background: var(--erp-paper-0);
+  border: 1px solid var(--erp-line);
+  border-radius: 10px;
+  padding: 12px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.erp-stat .erp-stat-label { font-size: 12.5px; color: var(--erp-ink-500); }
+.erp-stat .erp-stat-value {
+  font-family: var(--font-family-monospace);
+  font-size: 18px;
+  font-weight: 600;
+}
+.erp-stat.erp-tone-credit .erp-stat-value { color: var(--erp-credit); }
+.erp-stat.erp-tone-debit .erp-stat-value { color: var(--erp-debit); }
+
+.erp-section-heading {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--erp-ink-900);
+  border-bottom: 1px solid var(--erp-line-strong);
+  padding-bottom: 8px;
+  margin: 26px 0 12px;
+}
+
+.erp-dashboard-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.erp-panel {
+  background: var(--erp-paper-0);
+  border: 1px solid var(--erp-line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.erp-panel > h2 {
+  margin: 0;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--erp-paper-0);
+  border-bottom: 1px solid var(--erp-line);
+  color: var(--erp-ink-900);
+}
+.erp-panel table { width: 100%; border-collapse: collapse; }
+.erp-panel table td, .erp-panel table th {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--erp-line);
+  font-size: 13px;
+}
+.erp-panel table tr:last-child td { border-bottom: none; }
+.erp-panel table tr:hover td { background: var(--erp-paper-50); }
+.erp-panel .num {
+  text-align: right;
+  white-space: nowrap;
+  font-family: var(--font-family-monospace);
+  font-variant-numeric: tabular-nums;
+}
+.erp-panel .erp-empty { padding: 16px 14px; color: var(--erp-ink-500); font-size: 13px; }
+.erp-badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--erp-debit-bg);
+  color: var(--erp-debit);
+}
+
+/* ---------- Voucher / invoice styling ----------
+   Targets fieldsets tagged with these classes in admin.py's
+   fieldsets tuples (presentation grouping only). */
+fieldset.erp-voucher-header { border: 1px solid var(--erp-line); }
+fieldset.erp-voucher-header .form-row { padding: 10px 12px; }
+
+/* Visually move the Totals box to AFTER the item/line inlines, like the
+   totals box at the bottom of a real invoice, without touching the
+   underlying form/DOM order (Django always renders fieldsets before
+   inlines) or any calculation. Totals fields are all read-only, so
+   this has no effect on tab order for data entry. */
+#content-main form > div:first-of-type {
+  display: flex;
+  flex-direction: column;
+}
+fieldset.erp-totals-box {
+  order: 5;
+  margin-top: 6px;
+}
+
+fieldset.erp-totals-box {
+  border: 1.5px solid var(--erp-ink-900);
+  background: var(--erp-paper-50);
+  max-width: 420px;
+  margin-left: auto;
+  margin-right: 0;
+}
+fieldset.erp-totals-box h2 { background: var(--erp-ink-900); }
+fieldset.erp-totals-box .form-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 7px 14px;
+  border-bottom: 1px dashed var(--erp-line-strong);
+}
+fieldset.erp-totals-box .form-row:last-of-type { border-bottom: none; }
+fieldset.erp-totals-box .form-row > div:first-child { flex: 0 0 auto; }
+fieldset.erp-totals-box label { font-size: 12.5px; color: var(--erp-ink-500); font-weight: 500; }
+fieldset.erp-totals-box .readonly {
+  font-family: var(--font-family-monospace);
+  font-weight: 600;
+  font-size: 14px;
+  text-align: right;
+}
+fieldset.erp-totals-box .field-net_amount { background: var(--erp-gold-bg); border-radius: 6px; }
+fieldset.erp-totals-box .field-net_amount label { color: var(--erp-ink-900); font-weight: 700; }
+fieldset.erp-totals-box .field-net_amount .readonly {
+  font-size: 19px;
+  color: var(--erp-ink-900);
+  border-bottom: 2px solid var(--erp-gold);
+}
+
+/* Item / line inline tables: zebra rows + tabular money columns */
+.inline-group table.form-row, #items-group table, #bill_sundries-group table, #lines-group table {
+  border-collapse: collapse;
+}
+#items-group tbody tr.form-row:nth-child(odd) td,
+#bill_sundries-group tbody tr.form-row:nth-child(odd) td,
+#lines-group tbody tr.form-row:nth-child(odd) td {
+  background: var(--erp-paper-50);
+}
+#items-group td.field-rate input, #items-group td.field-quantity input,
+#items-group td.field-discount input, #items-group td.field-tax input,
+#bill_sundries-group td.field-amount input,
+#lines-group td.field-debit input, #lines-group td.field-credit input, #lines-group td.field-amount input {
+  font-family: var(--font-family-monospace);
+  text-align: right;
+}
+#items-group td.field-basic_amount, #items-group td.field-amount_after_discount,
+#items-group td.field-tax_amount, #items-group td.field-net_amount {
+  font-family: var(--font-family-monospace);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Field labels via known field classes (safe: Django always emits these) */
+#items-group td.field-item::before { content: "Item"; }
+#items-group td.field-unit::before { content: "Unit"; }
+#items-group td.field-quantity::before { content: "Qty"; }
+#items-group td.field-rate::before { content: "Rate"; }
+#items-group td.field-discount::before { content: "Discount"; }
+#items-group td.field-tax::before { content: "Tax %"; }
+#items-group td.field-basic_amount::before { content: "Basic"; }
+#items-group td.field-amount_after_discount::before { content: "After Discount"; }
+#items-group td.field-tax_amount::before { content: "Tax Amt"; }
+#items-group td.field-net_amount::before { content: "Net Amount"; }
+#bill_sundries-group td.field-bill_sundry::before { content: "Bill Sundry"; }
+#bill_sundries-group td.field-amount::before { content: "Amount"; }
+#lines-group td.field-account::before { content: "Account"; }
+#lines-group td.field-debit::before { content: "Debit"; }
+#lines-group td.field-credit::before { content: "Credit"; }
+#lines-group td.field-remarks::before { content: "Remarks"; }
+#lines-group td.field-amount::before { content: "Amount"; }
+
+/* Change lists: money-ish and code-ish columns read as tabular mono */
+#result_list td.field-net_amount_list,
+#result_list td.field-total_amount_list,
+#result_list td.field-total_debit_list,
+#result_list td.field-sale_price,
+#result_list td.field-purchase_price,
+#result_list td.field-mrp,
+#result_list td.field-opening_main,
+#result_list td.field-opening_value,
+#result_list td.field-hsn,
+#result_list td.field-invoice_no,
+#result_list td.field-voucher_no {
+  font-family: var(--font-family-monospace);
+  font-variant-numeric: tabular-nums;
+}
+#result_list tbody tr:hover { background: var(--erp-paper-50); }
+
+/* ---------- General touch-friendly sizing (all screens) ---------- */
+#content input[type="text"],
+#content input[type="number"],
+#content input[type="email"],
+#content input[type="password"],
+#content input[type="date"],
+#content input[type="search"],
+#content select,
+#content textarea {
+  font-size: 15px;
+  min-height: 36px;
+  padding: 6px 8px;
+  border-radius: 5px;
+}
+
+#content .button,
+#content input[type="submit"],
+#content input[type="button"],
+#content .submit-row input,
+#content a.button {
+  min-height: 38px;
+  padding: 8px 16px;
+  font-size: 14px;
+}
+
+/* Fixed Save bar so long vouchers (many item rows) don't force
+   scrolling all the way to the bottom to save. Deliberately uses
+   `fixed` (viewport-relative) rather than `sticky`: Django's own
+   admin layout (#container is a height:100% flex column) stretches
+   the content area to a viewport-height box, which makes `sticky`
+   compute against that short box instead of the real page length
+   and stick immediately. `fixed` sidesteps that without touching
+   Django's own layout CSS. */
+.submit-row {
+  position: fixed;
+  left: 23px;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  background: var(--erp-paper-0);
+  border-top: 1px solid var(--erp-line-strong);
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.08);
+  margin: 0;
+  border-radius: 0;
+}
+.main.shifted .submit-row { left: 298px; }
+.popup .submit-row { left: 0; }
+/* Leave clearance so the fixed bar never permanently covers the
+   last field/row on forms. Harmless extra breathing room on the
+   (rare) pages without a submit-row. */
+#content { padding-bottom: 76px; }
+
+/* =========================================================
+   Mobile breakpoint (phones & small tablets)
+   ========================================================= */
+@media (max-width: 700px) {
+  * { box-sizing: border-box; }
+  body { overflow-x: hidden; }
+  .erp-hero { grid-template-columns: 1fr; }
+  .erp-dashboard-columns { grid-template-columns: 1fr; }
+  fieldset.erp-totals-box { max-width: none; }
+
+  /* Collapse the voucher line-item tables into stacked cards. */
+  #items-group table,
+  #bill_sundries-group table,
+  #lines-group table {
+    border: none;
+  }
+  #items-group thead,
+  #bill_sundries-group thead,
+  #lines-group thead {
+    display: none;
+  }
+  #items-group tbody,
+  #bill_sundries-group tbody,
+  #lines-group tbody,
+  #items-group tr,
+  #bill_sundries-group tr,
+  #lines-group tr,
+  #items-group td,
+  #bill_sundries-group td,
+  #lines-group td {
+    display: block;
+    width: 100% !important;
+  }
+  #items-group tbody tr.form-row,
+  #bill_sundries-group tbody tr.form-row,
+  #lines-group tbody tr.form-row {
+    border: 1px solid var(--erp-line-strong);
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-bottom: 12px;
+    background: var(--erp-paper-0) !important;
+  }
+  #items-group tbody tr.form-row:nth-child(odd) td { background: transparent; }
+  #items-group td,
+  #bill_sundries-group td,
+  #lines-group td {
+    border: none !important;
+    padding: 6px 0 6px 0 !important;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    background: transparent !important;
+  }
+  #items-group td::before,
+  #bill_sundries-group td::before,
+  #lines-group td::before {
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--erp-ink-500);
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  #items-group td select,
+  #items-group td input,
+  #bill_sundries-group td select,
+  #bill_sundries-group td input,
+  #lines-group td select,
+  #lines-group td input {
+    max-width: 62%;
+  }
+  #items-group td .select2-container,
+  #bill_sundries-group td .select2-container,
+  #lines-group td .select2-container {
+    max-width: 62% !important;
+    flex: 0 1 auto;
+  }
+  #items-group td,
+  #bill_sundries-group td,
+  #lines-group td {
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+  #items-group td .related-widget-wrapper,
+  #bill_sundries-group td .related-widget-wrapper,
+  #lines-group td .related-widget-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    max-width: 100%;
+    justify-content: flex-end;
+  }
+  #items-group td.delete,
+  #bill_sundries-group td.delete,
+  #lines-group td.delete {
+    justify-content: flex-end;
+  }
+
+  .erp-report-wrap { overflow-x: auto; }
+
+  .submit-row {
+    display: flex;
+    flex-wrap: wrap;
+    left: 0 !important;
+  }
+  #content { padding-bottom: 90px; }
+}
