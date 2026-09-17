@@ -64,11 +64,13 @@ def _auto_adjust_columns(ws, min_width=15, max_width=35):
 ITEM_HEADERS = [
     "Item Name *",
     "Item Group",
+    "Item Type (Goods/Service)",
     "Main Unit *",
     "Alt Unit",
     "Conversion Factor",
     "HSN Code",
     "Tax Rate %",
+    "Cess %",
     "Sale Price",
     "Purchase Price",
     "MRP",
@@ -80,11 +82,13 @@ ITEM_SAMPLE_DATA = [
     [
         "Laptop Dell Inspiron 15",
         "Electronics",
+        "Goods",
         "PCS",
         "",
         1,
         "84713010",
         18,
+        0,
         55000.00,
         48000.00,
         60000.00,
@@ -94,11 +98,13 @@ ITEM_SAMPLE_DATA = [
     [
         "Cotton T-Shirt Blue M",
         "Garments",
+        "Goods",
         "PCS",
         "BOX",
         10,
         "61091000",
         5,
+        0,
         499.00,
         320.00,
         699.00,
@@ -108,10 +114,12 @@ ITEM_SAMPLE_DATA = [
     [
         "Basmati Rice Royal 25kg",
         "Groceries",
+        "Goods",
         "BAG",
         "KG",
         25,
         "10063020",
+        0,
         0,
         2200.00,
         1950.00,
@@ -282,10 +290,14 @@ def import_items_from_excel(file_obj, update_existing=False):
 
         item_group = _clean_str(get_val(row, "Item Group", "Group", "item_group"))
         
+        raw_type = _clean_str(get_val(row, "Item Type (Goods/Service)", "Item Type", "Type", "item_type")).lower()
+        is_service = "service" in raw_type or "serv" in raw_type
+        item_type = Item.ItemType.SERVICE if is_service else Item.ItemType.GOODS
+
         main_unit_str = _clean_str(get_val(row, "Main Unit *", "Main Unit", "Unit", "main_unit"))
-        if not main_unit_str:
+        if not main_unit_str and not is_service:
             main_unit_str = "PCS"
-        main_unit = get_or_create_unit(main_unit_str)
+        main_unit = get_or_create_unit(main_unit_str) if main_unit_str else None
 
         alt_unit_str = _clean_str(get_val(row, "Alt Unit", "alt_unit"))
         alt_unit = get_or_create_unit(alt_unit_str) if alt_unit_str else None
@@ -298,6 +310,7 @@ def import_items_from_excel(file_obj, update_existing=False):
         hsn = re.sub(r"\D", "", hsn)
 
         tax = _parse_decimal(get_val(row, "Tax Rate %", "Tax Rate", "Tax", "tax"), Decimal("0"))
+        cess_rate = _parse_decimal(get_val(row, "Cess %", "GST Cess %", "Cess", "cess_rate"), Decimal("0"))
         sale_price = _parse_decimal(get_val(row, "Sale Price", "sale_price"), Decimal("0"))
         purchase_price = _parse_decimal(get_val(row, "Purchase Price", "purchase_price"), Decimal("0"))
         mrp = _parse_decimal(get_val(row, "MRP", "mrp"), Decimal("0"))
@@ -308,11 +321,13 @@ def import_items_from_excel(file_obj, update_existing=False):
             "row_idx": row_idx,
             "item_name": name,
             "item_group": item_group,
+            "item_type": item_type,
             "main_unit": main_unit,
             "alt_unit": alt_unit,
             "conversion": conversion,
             "hsn": hsn,
             "tax": tax,
+            "cess_rate": cess_rate,
             "sale_price": sale_price,
             "purchase_price": purchase_price,
             "mrp": mrp,
@@ -327,11 +342,13 @@ def import_items_from_excel(file_obj, update_existing=False):
             if existing:
                 if update_existing:
                     existing.item_group = itm["item_group"]
+                    existing.item_type = itm["item_type"]
                     existing.main_unit = itm["main_unit"]
                     existing.alt_unit = itm["alt_unit"]
                     existing.conversion = itm["conversion"]
                     existing.hsn = itm["hsn"]
                     existing.tax = itm["tax"]
+                    existing.cess_rate = itm["cess_rate"]
                     existing.sale_price = itm["sale_price"]
                     existing.purchase_price = itm["purchase_price"]
                     existing.mrp = itm["mrp"]
@@ -349,11 +366,13 @@ def import_items_from_excel(file_obj, update_existing=False):
                 new_item = Item(
                     item_name=itm["item_name"],
                     item_group=itm["item_group"],
+                    item_type=itm["item_type"],
                     main_unit=itm["main_unit"],
                     alt_unit=itm["alt_unit"],
                     conversion=itm["conversion"],
                     hsn=itm["hsn"],
                     tax=itm["tax"],
+                    cess_rate=itm["cess_rate"],
                     sale_price=itm["sale_price"],
                     purchase_price=itm["purchase_price"],
                     mrp=itm["mrp"],
@@ -1133,9 +1152,13 @@ def import_sales_from_excel(file_obj, default_sale_type_id=None, update_existing
             if not date_obj:
                 date_obj = datetime.date.today()
 
-            st_obj = sale_type_cache.get(sale_type_str.lower()) if sale_type_str else default_sale_type
+            st_obj = sale_type_cache.get(sale_type_str.lower()) if sale_type_str else None
             if not st_obj:
-                st_obj = default_sale_type
+                if default_sale_type_id:
+                    st_obj = default_sale_type
+                else:
+                    from .models import _guess_sale_type
+                    st_obj = _guess_sale_type(party_obj.id) or default_sale_type
 
             grouped_invoices[inv_no] = {
                 "date": date_obj,
@@ -1255,6 +1278,7 @@ PURCHASE_VOUCHER_HEADERS = [
     "Invoice No *",
     "Party (Supplier) *",
     "Purchase Type",
+    "Reverse Charge (Yes/No)",
     "Item Name *",
     "Unit",
     "Quantity *",
@@ -1276,6 +1300,7 @@ PURCHASE_SAMPLE_ROWS = [
         "PUR-501",
         "National Steel Corporation",
         "Local Purchase",
+        "No",
         "Laptop Dell Inspiron 15",
         "PCS",
         5,
@@ -1295,6 +1320,7 @@ PURCHASE_SAMPLE_ROWS = [
         "PUR-501",
         "National Steel Corporation",
         "Local Purchase",
+        "No",
         "Cotton T-Shirt Blue M",
         "PCS",
         20,
@@ -1314,6 +1340,7 @@ PURCHASE_SAMPLE_ROWS = [
         "PUR-502",
         "National Steel Corporation",
         "Local Purchase",
+        "No",
         "Basmati Rice Royal 25kg",
         "BAG",
         25,
@@ -1448,6 +1475,7 @@ def import_purchases_from_excel(file_obj, default_purchase_type_id=None, update_
     _last_raw_date = None
     _last_party_str = ""
     _last_purchase_type_str = ""
+    _last_is_rcm = False
 
     for row_idx, row in enumerate(rows[1:], start=2):
         if not any(row):
@@ -1482,6 +1510,13 @@ def import_purchases_from_excel(file_obj, default_purchase_type_id=None, update_
             purchase_type_str = _last_purchase_type_str
         else:
             _last_purchase_type_str = purchase_type_str
+
+        rcm_raw = _clean_str(get_val(row, "Reverse Charge (Yes/No)", "Reverse Charge", "RCM", "is_reverse_charge")).lower()
+        if rcm_raw:
+            is_rcm = rcm_raw in ["yes", "y", "true", "1"]
+            _last_is_rcm = is_rcm
+        else:
+            is_rcm = _last_is_rcm
 
         item_str = _clean_str(get_val(row, "Item Name *", "Item Name", "Item", "item_name", "item"))
         unit_str = _clean_str(get_val(row, "Unit", "unit"))
@@ -1535,15 +1570,20 @@ def import_purchases_from_excel(file_obj, default_purchase_type_id=None, update_
             if not date_obj:
                 date_obj = datetime.date.today()
 
-            pt_obj = purchase_type_cache.get(purchase_type_str.lower()) if purchase_type_str else default_purchase_type
+            pt_obj = purchase_type_cache.get(purchase_type_str.lower()) if purchase_type_str else None
             if not pt_obj:
-                pt_obj = default_purchase_type
+                if default_purchase_type_id:
+                    pt_obj = default_purchase_type
+                else:
+                    from .models import _guess_purchase_type
+                    pt_obj = _guess_purchase_type(party_obj.id) or default_purchase_type
 
             grouped_invoices[inv_no] = {
                 "date": date_obj,
                 "invoice_no": inv_no,
                 "account": party_obj,
                 "purchase_type": pt_obj,
+                "is_reverse_charge": is_rcm,
                 "narration": narration,
                 "items": [],
                 "sundries": [],
@@ -1598,6 +1638,7 @@ def import_purchases_from_excel(file_obj, default_purchase_type_id=None, update_
                     existing.date = inv_data["date"]
                     existing.account = inv_data["account"]
                     existing.purchase_type = inv_data["purchase_type"]
+                    existing.is_reverse_charge = inv_data.get("is_reverse_charge", False)
                     existing.narration = inv_data["narration"]
                     existing.save()
                     existing.items.all().delete()
@@ -1613,6 +1654,7 @@ def import_purchases_from_excel(file_obj, default_purchase_type_id=None, update_
                     invoice_no=inv_no,
                     account=inv_data["account"],
                     purchase_type=inv_data["purchase_type"],
+                    is_reverse_charge=inv_data.get("is_reverse_charge", False),
                     narration=inv_data["narration"],
                 )
                 result["vouchers_created"] += 1
@@ -2125,11 +2167,17 @@ def import_sale_returns_from_excel(file_obj, default_sale_type_id=None, update_e
             if not date_obj:
                 date_obj = datetime.date.today()
 
-            st_obj = sale_type_cache.get(sale_type_str.lower()) if sale_type_str else default_sale_type
-            if not st_obj:
-                st_obj = default_sale_type
-
             against_obj = sale_cache.get(against_str.lower()) if against_str else None
+
+            st_obj = sale_type_cache.get(sale_type_str.lower()) if sale_type_str else None
+            if not st_obj:
+                if default_sale_type_id:
+                    st_obj = default_sale_type
+                elif against_obj and against_obj.sale_type:
+                    st_obj = against_obj.sale_type
+                else:
+                    from .models import _guess_sale_type
+                    st_obj = _guess_sale_type(party_obj.id) or default_sale_type
 
             grouped[group_key] = {
                 "voucher_no": voucher_no,
@@ -2501,11 +2549,17 @@ def import_purchase_returns_from_excel(file_obj, default_purchase_type_id=None, 
             if not date_obj:
                 date_obj = datetime.date.today()
 
-            pt_obj = purchase_type_cache.get(purchase_type_str.lower()) if purchase_type_str else default_purchase_type
-            if not pt_obj:
-                pt_obj = default_purchase_type
-
             against_obj = purchase_cache.get(against_str.lower()) if against_str else None
+
+            pt_obj = purchase_type_cache.get(purchase_type_str.lower()) if purchase_type_str else None
+            if not pt_obj:
+                if default_purchase_type_id:
+                    pt_obj = default_purchase_type
+                elif against_obj and against_obj.purchase_type:
+                    pt_obj = against_obj.purchase_type
+                else:
+                    from .models import _guess_purchase_type
+                    pt_obj = _guess_purchase_type(party_obj.id) or default_purchase_type
 
             grouped[group_key] = {
                 "voucher_no": voucher_no,
