@@ -1850,6 +1850,1158 @@ def import_receipts_from_excel(file_obj, update_existing=False):
     return _import_cash_vouchers(file_obj, Receipt, ReceiptLine, "Party / Income *", update_existing)
 
 
+# ==============================================================================
+# SALE RETURN VOUCHER TEMPLATE & IMPORT
+# ==============================================================================
+
+SALE_RETURN_VOUCHER_HEADERS = [
+    "Date *",
+    "Voucher No",
+    "Party (Customer) *",
+    "Sale Type",
+    "Against Sale Invoice",
+    "Item Name *",
+    "Unit",
+    "Quantity *",
+    "Rate",
+    "Discount",
+    "Tax Rate %",
+    "Bill Sundry 1",
+    "Sundry Amount 1",
+    "Bill Sundry 2",
+    "Sundry Amount 2",
+    "Bill Sundry 3",
+    "Sundry Amount 3",
+    "Narration",
+]
+
+SALE_RETURN_SAMPLE_ROWS = [
+    [
+        "2026-09-05",
+        "SR-001",
+        "Apex Infotech Pvt Ltd",
+        "Local Sale",
+        "INV-001",
+        "Laptop Dell Inspiron 15",
+        "PCS",
+        1,
+        55000.00,
+        0.00,
+        18,
+        "",
+        0.00,
+        "",
+        0.00,
+        "",
+        0.00,
+        "Customer returned damaged unit",
+    ],
+    [
+        "2026-09-06",
+        "SR-002",
+        "Apex Infotech Pvt Ltd",
+        "Local Sale",
+        "",
+        "Cotton T-Shirt Blue M",
+        "PCS",
+        2,
+        499.00,
+        0.00,
+        5,
+        "Rounded Off",
+        0.00,
+        "",
+        0.00,
+        "",
+        0.00,
+        "Wrong colour returned",
+    ],
+]
+
+
+def generate_sale_return_template():
+    """Generate and return an in-memory .xlsx template for Sale Return voucher import."""
+    check_openpyxl()
+    from .models import Account, Item, SaleType, BillSundry, Sale
+
+    wb = openpyxl.Workbook()
+
+    ws = wb.active
+    ws.title = "Sale Returns"
+    _apply_header_style(ws, SALE_RETURN_VOUCHER_HEADERS, bg_color="7B3F00")
+    for r in SALE_RETURN_SAMPLE_ROWS:
+        ws.append(r)
+    _auto_adjust_columns(ws)
+
+    ws_acc = wb.create_sheet(title="Existing Customers & Accounts")
+    _apply_header_style(ws_acc, ["Account Name", "Group", "State", "GSTIN"], bg_color="366092")
+    for acc in Account.objects.select_related("account_group").order_by("account_name")[:200]:
+        ws_acc.append([acc.account_name, acc.account_group.name if acc.account_group else "", acc.state, acc.gst])
+    _auto_adjust_columns(ws_acc)
+
+    ws_items = wb.create_sheet(title="Existing Items")
+    _apply_header_style(ws_items, ["Item Name", "Main Unit", "Sale Price", "Tax Rate %"], bg_color="4F81BD")
+    for itm in Item.objects.select_related("main_unit").order_by("item_name")[:200]:
+        ws_items.append([itm.item_name, itm.main_unit.name if itm.main_unit else "", float(itm.sale_price), float(itm.tax)])
+    _auto_adjust_columns(ws_items)
+
+    ws_types = wb.create_sheet(title="Sale Types & Sundries")
+    _apply_header_style(ws_types, ["Sale Types Available", "", "Bill Sundries Available"], bg_color="558B2F")
+    sale_types = list(SaleType.objects.all().order_by("name"))
+    sundries = list(BillSundry.objects.all().order_by("name"))
+    max_len = max(len(sale_types), len(sundries), 1)
+    for i in range(max_len):
+        st_name = sale_types[i].name if i < len(sale_types) else ""
+        bs_name = sundries[i].name if i < len(sundries) else ""
+        ws_types.append([st_name, "", bs_name])
+    _auto_adjust_columns(ws_types)
+
+    ws_sales = wb.create_sheet(title="Existing Sales (for Against)")
+    _apply_header_style(ws_sales, ["Invoice No", "Date", "Party"], bg_color="8E44AD")
+    for s in Sale.objects.select_related("account").order_by("-date")[:200]:
+        ws_sales.append([s.invoice_no, str(s.date), s.account.account_name])
+    _auto_adjust_columns(ws_sales)
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+
+def import_sale_returns_from_excel(file_obj, default_sale_type_id=None, update_existing=False):
+    """
+    Parse an Excel file and import Sale Return Vouchers with items and bill sundries.
+    Mirrors import_sales_from_excel; key differences: model is SaleReturn, voucher
+    identifier is voucher_no (auto-assigned if blank), and an optional
+    'Against Sale Invoice' column links the return to the original Sale.
+    """
+    check_openpyxl()
+    from .models import (
+        Account, Item, Unit, Sale, SaleType, BillSundry,
+        SaleReturn, SaleReturnItem, SaleReturnBillSundry,
+    )
+
+    result = {
+        "success": False,
+        "total_rows": 0,
+        "vouchers_created": 0,
+        "vouchers_updated": 0,
+        "vouchers_skipped": 0,
+        "items_count": 0,
+        "errors": [],
+    }
+
+    try:
+        wb = openpyxl.load_workbook(file_obj, data_only=True)
+        ws = wb.active
+    except Exception as e:
+        result["errors"].append(f"Could not open Excel file: {str(e)}")
+        return result
+
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        result["errors"].append("The Excel file is empty.")
+        return result
+
+    header_row = rows[0]
+    header_map = {}
+    for idx, cell in enumerate(header_row):
+        norm = _normalize_header(cell)
+        if norm:
+            header_map[norm] = idx
+
+    def get_val(row, *aliases):
+        for alias in aliases:
+            norm = _normalize_header(alias)
+            if norm in header_map:
+                col_idx = header_map[norm]
+                if col_idx < len(row):
+                    return row[col_idx]
+        return None
+
+    account_cache = {a.account_name.lower(): a for a in Account.objects.all()}
+    item_cache = {i.item_name.lower(): i for i in Item.objects.select_related("main_unit").all()}
+    unit_cache = {u.name.lower(): u for u in Unit.objects.all()}
+    sale_type_cache = {st.name.lower(): st for st in SaleType.objects.all()}
+    sundry_cache = {bs.name.lower(): bs for bs in BillSundry.objects.all()}
+    sale_cache = {s.invoice_no.lower(): s for s in Sale.objects.all()}
+
+    default_sale_type = None
+    if default_sale_type_id:
+        default_sale_type = SaleType.objects.filter(id=default_sale_type_id).first()
+    if not default_sale_type:
+        default_sale_type = sale_type_cache.get("local sale") or SaleType.objects.first()
+
+    grouped = {}
+    row_errors = []
+
+    _last_voucher_no = ""
+    _last_raw_date = None
+    _last_party_str = ""
+    _last_sale_type_str = ""
+    _last_against_str = ""
+
+    for row_idx, row in enumerate(rows[1:], start=2):
+        if not any(row):
+            continue
+
+        result["total_rows"] += 1
+
+        voucher_no = _clean_str(get_val(row, "Voucher No", "voucher_no", "Voucher No *"))
+        if not voucher_no:
+            voucher_no = _last_voucher_no
+        _last_voucher_no = voucher_no  # may be blank → auto-assigned later
+
+        raw_date = get_val(row, "Date *", "Date", "date")
+        if raw_date is None or _clean_str(raw_date) == "":
+            raw_date = _last_raw_date
+        else:
+            _last_raw_date = raw_date
+        date_obj = _parse_date(raw_date)
+
+        party_str = _clean_str(get_val(row, "Party (Customer) *", "Party", "Customer", "Account"))
+        if not party_str:
+            party_str = _last_party_str
+        else:
+            _last_party_str = party_str
+
+        sale_type_str = _clean_str(get_val(row, "Sale Type", "sale_type", "type"))
+        if not sale_type_str:
+            sale_type_str = _last_sale_type_str
+        else:
+            _last_sale_type_str = sale_type_str
+
+        against_str = _clean_str(get_val(row, "Against Sale Invoice", "Against Sale", "Against Invoice", "against_sale"))
+        if not against_str:
+            against_str = _last_against_str
+        else:
+            _last_against_str = against_str
+
+        item_str = _clean_str(get_val(row, "Item Name *", "Item Name", "Item", "item_name", "item"))
+        unit_str = _clean_str(get_val(row, "Unit", "unit"))
+        qty_val = _parse_decimal(get_val(row, "Quantity *", "Quantity", "Qty", "quantity"), Decimal("0"))
+        rate_val = _parse_decimal(get_val(row, "Rate", "rate", "Price"), None)
+        discount_val = _parse_decimal(get_val(row, "Discount", "disc", "discount"), Decimal("0"))
+        tax_val = _parse_decimal(get_val(row, "Tax Rate %", "Tax Rate", "Tax", "tax"), None)
+        narration = _clean_str(get_val(row, "Narration", "narration", "Remarks"))
+
+        if not item_str:
+            row_errors.append(f"Row {row_idx}: 'Item Name' is required.")
+            continue
+
+        item_obj = item_cache.get(item_str.lower())
+        if not item_obj:
+            row_errors.append(f"Row {row_idx}: Item '{item_str}' does not exist. Please create it in Items master first.")
+            continue
+
+        if qty_val <= 0:
+            row_errors.append(f"Row {row_idx}: Quantity must be greater than 0.")
+            continue
+
+        if rate_val is None:
+            rate_val = item_obj.sale_price
+        if tax_val is None:
+            tax_val = item_obj.tax
+
+        unit_obj = unit_cache.get(unit_str.lower()) if unit_str else None
+        if not unit_obj:
+            unit_obj = item_obj.main_unit
+
+        # Use voucher_no as grouping key; blank means it will be a new auto-numbered voucher.
+        # We encode blank voucher_nos as a unique sentinel per date+party so that multiple
+        # blank-voucher rows can still be grouped by the user's visible "block".
+        group_key = voucher_no if voucher_no else f"__auto_{row_idx}__"
+
+        if group_key not in grouped:
+            if not party_str:
+                row_errors.append(f"Row {row_idx}: 'Party (Customer)' is required.")
+                continue
+
+            party_obj = account_cache.get(party_str.lower())
+            if not party_obj:
+                row_errors.append(f"Row {row_idx}: Account '{party_str}' does not exist. Please create it in Accounts master first.")
+                continue
+
+            if not date_obj:
+                date_obj = datetime.date.today()
+
+            st_obj = sale_type_cache.get(sale_type_str.lower()) if sale_type_str else default_sale_type
+            if not st_obj:
+                st_obj = default_sale_type
+
+            against_obj = sale_cache.get(against_str.lower()) if against_str else None
+
+            grouped[group_key] = {
+                "voucher_no": voucher_no,
+                "date": date_obj,
+                "account": party_obj,
+                "sale_type": st_obj,
+                "against_sale": against_obj,
+                "narration": narration,
+                "items": [],
+                "sundries": [],
+            }
+        else:
+            if narration and not grouped[group_key]["narration"]:
+                grouped[group_key]["narration"] = narration
+
+        grouped[group_key]["items"].append({
+            "item": item_obj,
+            "unit": unit_obj,
+            "quantity": qty_val,
+            "rate": rate_val,
+            "discount": discount_val,
+            "tax": tax_val,
+        })
+
+        sundry_col_pairs = [
+            ("Bill Sundry 1", "Sundry Amount 1"),
+            ("Bill Sundry 2", "Sundry Amount 2"),
+            ("Bill Sundry 3", "Sundry Amount 3"),
+            ("Bill Sundry", "Sundry Amount"),
+        ]
+        for s_col, a_col in sundry_col_pairs:
+            s_name = _clean_str(get_val(row, s_col))
+            if s_name:
+                s_obj = sundry_cache.get(s_name.lower())
+                if not s_obj:
+                    row_errors.append(f"Row {row_idx}: Bill Sundry '{s_name}' does not exist. Please create it in Bill Sundry master first.")
+                    continue
+                s_amt = _parse_decimal(get_val(row, a_col), Decimal("0"))
+                existing_ids = {s["bill_sundry"].id for s in grouped[group_key]["sundries"]}
+                if s_obj.id not in existing_ids:
+                    grouped[group_key]["sundries"].append({"bill_sundry": s_obj, "amount": s_amt})
+
+    if row_errors:
+        result["errors"].extend(row_errors)
+        return result
+
+    with transaction.atomic():
+        for group_key, data in grouped.items():
+            vno = data["voucher_no"]
+            sr_obj = SaleReturn.objects.filter(voucher_no=vno).first() if vno else None
+            if sr_obj:
+                if update_existing:
+                    sr_obj.date = data["date"]
+                    sr_obj.account = data["account"]
+                    sr_obj.sale_type = data["sale_type"]
+                    sr_obj.against_sale = data["against_sale"]
+                    sr_obj.narration = data["narration"]
+                    sr_obj.save()
+                    sr_obj.items.all().delete()
+                    sr_obj.bill_sundries.all().delete()
+                    result["vouchers_updated"] += 1
+                else:
+                    result["vouchers_skipped"] += 1
+                    continue
+            else:
+                sr_obj = SaleReturn.objects.create(
+                    voucher_no=vno or "",
+                    date=data["date"],
+                    account=data["account"],
+                    sale_type=data["sale_type"],
+                    against_sale=data["against_sale"],
+                    narration=data["narration"],
+                )
+                result["vouchers_created"] += 1
+
+            SaleReturnItem.objects.bulk_create([
+                SaleReturnItem(
+                    sale_return=sr_obj,
+                    item=itm["item"],
+                    unit=itm["unit"],
+                    quantity=itm["quantity"],
+                    rate=itm["rate"],
+                    discount=itm["discount"],
+                    tax=itm["tax"],
+                )
+                for itm in data["items"]
+            ])
+            result["items_count"] += len(data["items"])
+
+            for snd in data["sundries"]:
+                SaleReturnBillSundry.objects.create(
+                    sale_return=sr_obj,
+                    bill_sundry=snd["bill_sundry"],
+                    amount=snd["amount"],
+                )
+
+    result["success"] = bool(result["vouchers_created"] or result["vouchers_updated"] or result["vouchers_skipped"])
+    return result
+
+
+# ==============================================================================
+# PURCHASE RETURN VOUCHER TEMPLATE & IMPORT
+# ==============================================================================
+
+PURCHASE_RETURN_VOUCHER_HEADERS = [
+    "Date *",
+    "Voucher No",
+    "Party (Supplier) *",
+    "Purchase Type",
+    "Against Purchase Invoice",
+    "Item Name *",
+    "Unit",
+    "Quantity *",
+    "Rate",
+    "Discount",
+    "Tax Rate %",
+    "Bill Sundry 1",
+    "Sundry Amount 1",
+    "Bill Sundry 2",
+    "Sundry Amount 2",
+    "Bill Sundry 3",
+    "Sundry Amount 3",
+    "Narration",
+]
+
+PURCHASE_RETURN_SAMPLE_ROWS = [
+    [
+        "2026-09-05",
+        "PR-001",
+        "National Steel Corporation",
+        "Local Purchase",
+        "PUR-501",
+        "Laptop Dell Inspiron 15",
+        "PCS",
+        2,
+        48000.00,
+        0.00,
+        18,
+        "",
+        0.00,
+        "",
+        0.00,
+        "",
+        0.00,
+        "Returned defective stock to supplier",
+    ],
+    [
+        "2026-09-06",
+        "PR-002",
+        "National Steel Corporation",
+        "Local Purchase",
+        "",
+        "Basmati Rice Royal 25kg",
+        "BAG",
+        5,
+        1950.00,
+        0.00,
+        0,
+        "Rounded Off",
+        0.00,
+        "",
+        0.00,
+        "",
+        0.00,
+        "Short supply – returned surplus",
+    ],
+]
+
+
+def generate_purchase_return_template():
+    """Generate and return an in-memory .xlsx template for Purchase Return voucher import."""
+    check_openpyxl()
+    from .models import Account, Item, PurchaseType, BillSundry, Purchase
+
+    wb = openpyxl.Workbook()
+
+    ws = wb.active
+    ws.title = "Purchase Returns"
+    _apply_header_style(ws, PURCHASE_RETURN_VOUCHER_HEADERS, bg_color="4A235A")
+    for r in PURCHASE_RETURN_SAMPLE_ROWS:
+        ws.append(r)
+    _auto_adjust_columns(ws)
+
+    ws_acc = wb.create_sheet(title="Existing Suppliers & Accounts")
+    _apply_header_style(ws_acc, ["Account Name", "Group", "State", "GSTIN"], bg_color="366092")
+    for acc in Account.objects.select_related("account_group").order_by("account_name")[:200]:
+        ws_acc.append([acc.account_name, acc.account_group.name if acc.account_group else "", acc.state, acc.gst])
+    _auto_adjust_columns(ws_acc)
+
+    ws_items = wb.create_sheet(title="Existing Items")
+    _apply_header_style(ws_items, ["Item Name", "Main Unit", "Purchase Price", "Tax Rate %"], bg_color="4F81BD")
+    for itm in Item.objects.select_related("main_unit").order_by("item_name")[:200]:
+        ws_items.append([itm.item_name, itm.main_unit.name if itm.main_unit else "", float(itm.purchase_price), float(itm.tax)])
+    _auto_adjust_columns(ws_items)
+
+    ws_types = wb.create_sheet(title="Purchase Types & Sundries")
+    _apply_header_style(ws_types, ["Purchase Types Available", "", "Bill Sundries Available"], bg_color="922B21")
+    purchase_types = list(PurchaseType.objects.all().order_by("name"))
+    sundries = list(BillSundry.objects.all().order_by("name"))
+    max_len = max(len(purchase_types), len(sundries), 1)
+    for i in range(max_len):
+        pt_name = purchase_types[i].name if i < len(purchase_types) else ""
+        bs_name = sundries[i].name if i < len(sundries) else ""
+        ws_types.append([pt_name, "", bs_name])
+    _auto_adjust_columns(ws_types)
+
+    ws_pur = wb.create_sheet(title="Existing Purchases (for Against)")
+    _apply_header_style(ws_pur, ["Invoice No", "Date", "Supplier"], bg_color="117A65")
+    for p in Purchase.objects.select_related("account").order_by("-date")[:200]:
+        ws_pur.append([p.invoice_no, str(p.date), p.account.account_name])
+    _auto_adjust_columns(ws_pur)
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+
+def import_purchase_returns_from_excel(file_obj, default_purchase_type_id=None, update_existing=False):
+    """
+    Parse an Excel file and import Purchase Return Vouchers with items and bill sundries.
+    Mirrors import_purchases_from_excel; key differences: model is PurchaseReturn and
+    an optional 'Against Purchase Invoice' column links the return to the original Purchase.
+    """
+    check_openpyxl()
+    from .models import (
+        Account, Item, Unit, Purchase, PurchaseType, BillSundry,
+        PurchaseReturn, PurchaseReturnItem, PurchaseReturnBillSundry,
+    )
+
+    result = {
+        "success": False,
+        "total_rows": 0,
+        "vouchers_created": 0,
+        "vouchers_updated": 0,
+        "vouchers_skipped": 0,
+        "items_count": 0,
+        "errors": [],
+    }
+
+    try:
+        wb = openpyxl.load_workbook(file_obj, data_only=True)
+        ws = wb.active
+    except Exception as e:
+        result["errors"].append(f"Could not open Excel file: {str(e)}")
+        return result
+
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        result["errors"].append("The Excel file is empty.")
+        return result
+
+    header_row = rows[0]
+    header_map = {}
+    for idx, cell in enumerate(header_row):
+        norm = _normalize_header(cell)
+        if norm:
+            header_map[norm] = idx
+
+    def get_val(row, *aliases):
+        for alias in aliases:
+            norm = _normalize_header(alias)
+            if norm in header_map:
+                col_idx = header_map[norm]
+                if col_idx < len(row):
+                    return row[col_idx]
+        return None
+
+    account_cache = {a.account_name.lower(): a for a in Account.objects.all()}
+    item_cache = {i.item_name.lower(): i for i in Item.objects.select_related("main_unit").all()}
+    unit_cache = {u.name.lower(): u for u in Unit.objects.all()}
+    purchase_type_cache = {pt.name.lower(): pt for pt in PurchaseType.objects.all()}
+    sundry_cache = {bs.name.lower(): bs for bs in BillSundry.objects.all()}
+    purchase_cache = {p.invoice_no.lower(): p for p in Purchase.objects.all()}
+
+    default_purchase_type = None
+    if default_purchase_type_id:
+        default_purchase_type = PurchaseType.objects.filter(id=default_purchase_type_id).first()
+    if not default_purchase_type:
+        default_purchase_type = purchase_type_cache.get("local purchase") or PurchaseType.objects.first()
+
+    grouped = {}
+    row_errors = []
+
+    _last_voucher_no = ""
+    _last_raw_date = None
+    _last_party_str = ""
+    _last_purchase_type_str = ""
+    _last_against_str = ""
+
+    for row_idx, row in enumerate(rows[1:], start=2):
+        if not any(row):
+            continue
+
+        result["total_rows"] += 1
+
+        voucher_no = _clean_str(get_val(row, "Voucher No", "voucher_no", "Voucher No *"))
+        if not voucher_no:
+            voucher_no = _last_voucher_no
+        _last_voucher_no = voucher_no
+
+        raw_date = get_val(row, "Date *", "Date", "date")
+        if raw_date is None or _clean_str(raw_date) == "":
+            raw_date = _last_raw_date
+        else:
+            _last_raw_date = raw_date
+        date_obj = _parse_date(raw_date)
+
+        party_str = _clean_str(get_val(row, "Party (Supplier) *", "Party", "Supplier", "Account"))
+        if not party_str:
+            party_str = _last_party_str
+        else:
+            _last_party_str = party_str
+
+        purchase_type_str = _clean_str(get_val(row, "Purchase Type", "purchase_type", "type"))
+        if not purchase_type_str:
+            purchase_type_str = _last_purchase_type_str
+        else:
+            _last_purchase_type_str = purchase_type_str
+
+        against_str = _clean_str(get_val(row, "Against Purchase Invoice", "Against Purchase", "Against Invoice", "against_purchase"))
+        if not against_str:
+            against_str = _last_against_str
+        else:
+            _last_against_str = against_str
+
+        item_str = _clean_str(get_val(row, "Item Name *", "Item Name", "Item", "item_name", "item"))
+        unit_str = _clean_str(get_val(row, "Unit", "unit"))
+        qty_val = _parse_decimal(get_val(row, "Quantity *", "Quantity", "Qty", "quantity"), Decimal("0"))
+        rate_val = _parse_decimal(get_val(row, "Rate", "rate", "Price"), None)
+        discount_val = _parse_decimal(get_val(row, "Discount", "disc", "discount"), Decimal("0"))
+        tax_val = _parse_decimal(get_val(row, "Tax Rate %", "Tax Rate", "Tax", "tax"), None)
+        narration = _clean_str(get_val(row, "Narration", "narration", "Remarks"))
+
+        if not item_str:
+            row_errors.append(f"Row {row_idx}: 'Item Name' is required.")
+            continue
+
+        item_obj = item_cache.get(item_str.lower())
+        if not item_obj:
+            row_errors.append(f"Row {row_idx}: Item '{item_str}' does not exist. Please create it in Items master first.")
+            continue
+
+        if qty_val <= 0:
+            row_errors.append(f"Row {row_idx}: Quantity must be greater than 0.")
+            continue
+
+        if rate_val is None:
+            rate_val = item_obj.purchase_price
+        if tax_val is None:
+            tax_val = item_obj.tax
+
+        unit_obj = unit_cache.get(unit_str.lower()) if unit_str else None
+        if not unit_obj:
+            unit_obj = item_obj.main_unit
+
+        group_key = voucher_no if voucher_no else f"__auto_{row_idx}__"
+
+        if group_key not in grouped:
+            if not party_str:
+                row_errors.append(f"Row {row_idx}: 'Party (Supplier)' is required.")
+                continue
+
+            party_obj = account_cache.get(party_str.lower())
+            if not party_obj:
+                row_errors.append(f"Row {row_idx}: Account '{party_str}' does not exist. Please create it in Accounts master first.")
+                continue
+
+            if not date_obj:
+                date_obj = datetime.date.today()
+
+            pt_obj = purchase_type_cache.get(purchase_type_str.lower()) if purchase_type_str else default_purchase_type
+            if not pt_obj:
+                pt_obj = default_purchase_type
+
+            against_obj = purchase_cache.get(against_str.lower()) if against_str else None
+
+            grouped[group_key] = {
+                "voucher_no": voucher_no,
+                "date": date_obj,
+                "account": party_obj,
+                "purchase_type": pt_obj,
+                "against_purchase": against_obj,
+                "narration": narration,
+                "items": [],
+                "sundries": [],
+            }
+        else:
+            if narration and not grouped[group_key]["narration"]:
+                grouped[group_key]["narration"] = narration
+
+        grouped[group_key]["items"].append({
+            "item": item_obj,
+            "unit": unit_obj,
+            "quantity": qty_val,
+            "rate": rate_val,
+            "discount": discount_val,
+            "tax": tax_val,
+        })
+
+        sundry_col_pairs = [
+            ("Bill Sundry 1", "Sundry Amount 1"),
+            ("Bill Sundry 2", "Sundry Amount 2"),
+            ("Bill Sundry 3", "Sundry Amount 3"),
+            ("Bill Sundry", "Sundry Amount"),
+        ]
+        for s_col, a_col in sundry_col_pairs:
+            s_name = _clean_str(get_val(row, s_col))
+            if s_name:
+                s_obj = sundry_cache.get(s_name.lower())
+                if not s_obj:
+                    row_errors.append(f"Row {row_idx}: Bill Sundry '{s_name}' does not exist. Please create it in Bill Sundry master first.")
+                    continue
+                s_amt = _parse_decimal(get_val(row, a_col), Decimal("0"))
+                existing_ids = {s["bill_sundry"].id for s in grouped[group_key]["sundries"]}
+                if s_obj.id not in existing_ids:
+                    grouped[group_key]["sundries"].append({"bill_sundry": s_obj, "amount": s_amt})
+
+    if row_errors:
+        result["errors"].extend(row_errors)
+        return result
+
+    with transaction.atomic():
+        for group_key, data in grouped.items():
+            vno = data["voucher_no"]
+            pr_obj = PurchaseReturn.objects.filter(voucher_no=vno).first() if vno else None
+            if pr_obj:
+                if update_existing:
+                    pr_obj.date = data["date"]
+                    pr_obj.account = data["account"]
+                    pr_obj.purchase_type = data["purchase_type"]
+                    pr_obj.against_purchase = data["against_purchase"]
+                    pr_obj.narration = data["narration"]
+                    pr_obj.save()
+                    pr_obj.items.all().delete()
+                    pr_obj.bill_sundries.all().delete()
+                    result["vouchers_updated"] += 1
+                else:
+                    result["vouchers_skipped"] += 1
+                    continue
+            else:
+                pr_obj = PurchaseReturn.objects.create(
+                    voucher_no=vno or "",
+                    date=data["date"],
+                    account=data["account"],
+                    purchase_type=data["purchase_type"],
+                    against_purchase=data["against_purchase"],
+                    narration=data["narration"],
+                )
+                result["vouchers_created"] += 1
+
+            PurchaseReturnItem.objects.bulk_create([
+                PurchaseReturnItem(
+                    purchase_return=pr_obj,
+                    item=itm["item"],
+                    unit=itm["unit"],
+                    quantity=itm["quantity"],
+                    rate=itm["rate"],
+                    discount=itm["discount"],
+                    tax=itm["tax"],
+                )
+                for itm in data["items"]
+            ])
+            result["items_count"] += len(data["items"])
+
+            for snd in data["sundries"]:
+                PurchaseReturnBillSundry.objects.create(
+                    purchase_return=pr_obj,
+                    bill_sundry=snd["bill_sundry"],
+                    amount=snd["amount"],
+                )
+
+    result["success"] = bool(result["vouchers_created"] or result["vouchers_updated"] or result["vouchers_skipped"])
+    return result
+
+
+# ==============================================================================
+# CREDIT NOTE VOUCHER TEMPLATE & IMPORT
+# ==============================================================================
+
+CREDIT_NOTE_VOUCHER_HEADERS = [
+    "Date *",
+    "Voucher No",
+    "Party (Customer) *",
+    "Against Sale Invoice",
+    "Reason Account *",
+    "Amount *",
+    "Narration",
+]
+
+CREDIT_NOTE_SAMPLE_ROWS = [
+    ["2026-09-10", "CN-001", "Apex Infotech Pvt Ltd", "INV-001", "Sales Return", 5000.00, "Price correction after billing"],
+    ["", "CN-001", "", "", "Discount Allowed", 500.00, ""],
+    ["2026-09-11", "CN-002", "Walk-in Customer", "", "Sales Return", 1200.00, "Damaged goods returned"],
+]
+
+CREDIT_NOTE_COLUMN_GUIDE = [
+    {"name": "Date *", "type": "Date", "required": True, "description": "Voucher date. Enter on first row of each voucher."},
+    {"name": "Voucher No", "type": "Text", "required": False, "description": "Auto-generated (CN-) if left blank."},
+    {"name": "Party (Customer) *", "type": "Text", "required": True, "description": "Customer account being credited. Enter on first row; must already exist."},
+    {"name": "Against Sale Invoice", "type": "Text", "required": False, "description": "Optional: original sale invoice number this note relates to."},
+    {"name": "Reason Account *", "type": "Text", "required": True, "description": "Ledger debited by this line (e.g. 'Sales Return', 'Discount Allowed'). Must already exist."},
+    {"name": "Amount *", "type": "Number", "required": True, "description": "Positive amount for this reason line."},
+    {"name": "Narration", "type": "Text", "required": False, "description": "Voucher narration; enter on the first row."},
+]
+
+
+def generate_credit_note_template():
+    """Generate and return an in-memory .xlsx template for Credit Note import."""
+    check_openpyxl()
+    from .models import Account, Sale
+
+    wb = openpyxl.Workbook()
+
+    ws = wb.active
+    ws.title = "Credit Notes"
+    _apply_header_style(ws, CREDIT_NOTE_VOUCHER_HEADERS, bg_color="1A5276")
+    for r in CREDIT_NOTE_SAMPLE_ROWS:
+        ws.append(r)
+    _auto_adjust_columns(ws)
+
+    ws_acc = wb.create_sheet(title="Existing Accounts")
+    _apply_header_style(ws_acc, ["Account Name", "Group"], bg_color="366092")
+    for acc in Account.objects.select_related("account_group").order_by("account_name")[:500]:
+        ws_acc.append([acc.account_name, acc.account_group.name if acc.account_group else ""])
+    _auto_adjust_columns(ws_acc)
+
+    ws_sales = wb.create_sheet(title="Existing Sales (for Against)")
+    _apply_header_style(ws_sales, ["Invoice No", "Date", "Party"], bg_color="8E44AD")
+    for s in Sale.objects.select_related("account").order_by("-date")[:200]:
+        ws_sales.append([s.invoice_no, str(s.date), s.account.account_name])
+    _auto_adjust_columns(ws_sales)
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+
+def import_credit_notes_from_excel(file_obj, update_existing=False):
+    """
+    Parse an Excel file and import Credit Note Vouchers.
+    Each voucher has one header party (customer being credited) and one or more
+    reason-ledger lines (accounts debited, e.g. Sales Return, Discount Allowed).
+    No Cash/Bank 'Through' account is involved — the party is a trade debtor.
+    """
+    check_openpyxl()
+    from .models import Account, Sale, CreditNote, CreditNoteLine
+
+    result = _cash_voucher_result()
+    loaded, errors = _load_import_rows(file_obj)
+    if errors:
+        result["errors"] = errors
+        return result
+    rows, header_map = loaded
+    accounts = {a.account_name.lower(): a for a in Account.objects.select_related("account_group").all()}
+    sale_cache = {s.invoice_no.lower(): s for s in Sale.objects.all()}
+    grouped, row_errors = {}, []
+
+    _last_voucher_no = ""
+    _last_raw_date = None
+    _last_party_name = ""
+    _last_against_str = ""
+    _last_narration = ""
+
+    for row_number, row in enumerate(rows, start=2):
+        if not any(row):
+            continue
+        result["total_rows"] += 1
+
+        voucher_no = _clean_str(_row_value(row, header_map, "Voucher No", "voucher_no", "Voucher No *"))
+        if not voucher_no:
+            voucher_no = _last_voucher_no
+        _last_voucher_no = voucher_no
+
+        reason_name = _clean_str(_row_value(row, header_map, "Reason Account *", "Reason Account", "Reason", "Account *", "Account"))
+        amount = _parse_decimal(_row_value(row, header_map, "Amount *", "Amount"), Decimal("0"))
+
+        if not reason_name or amount <= 0:
+            row_errors.append(f"Row {row_number} ({voucher_no}): 'Reason Account' and a positive 'Amount' are required on every line.")
+            continue
+
+        reason_acc = accounts.get(reason_name.lower())
+        if not reason_acc:
+            row_errors.append(f"Row {row_number} ({voucher_no}): Reason Account '{reason_name}' does not exist.")
+            continue
+
+        group_key = voucher_no if voucher_no else f"__auto_{row_number}__"
+
+        if group_key not in grouped:
+            party_name = _clean_str(_row_value(row, header_map, "Party (Customer) *", "Party (Customer)", "Party", "Customer"))
+            if not party_name:
+                party_name = _last_party_name
+            else:
+                _last_party_name = party_name
+
+            if not party_name:
+                row_errors.append(f"Row {row_number} ({group_key}): 'Party (Customer)' is required on the first row of each voucher.")
+                continue
+
+            party_acc = accounts.get(party_name.lower())
+            if not party_acc:
+                row_errors.append(f"Row {row_number} ({group_key}): Party account '{party_name}' does not exist.")
+                continue
+
+            raw_date = _row_value(row, header_map, "Date *", "Date")
+            if raw_date is None or _clean_str(raw_date) == "":
+                raw_date = _last_raw_date
+            else:
+                _last_raw_date = raw_date
+            voucher_date = _parse_date(raw_date)
+            if not voucher_date:
+                row_errors.append(f"Row {row_number} ({group_key}): a valid Date is required on the first row.")
+                continue
+
+            against_str = _clean_str(_row_value(row, header_map, "Against Sale Invoice", "Against Sale", "Against Invoice"))
+            if not against_str:
+                against_str = _last_against_str
+            else:
+                _last_against_str = against_str
+            against_obj = sale_cache.get(against_str.lower()) if against_str else None
+
+            narration = _clean_str(_row_value(row, header_map, "Narration", "Remarks"))
+            if not narration:
+                narration = _last_narration
+            else:
+                _last_narration = narration
+
+            grouped[group_key] = {
+                "voucher_no": voucher_no,
+                "date": voucher_date,
+                "account": party_acc,
+                "against_sale": against_obj,
+                "narration": narration,
+                "lines": [],
+            }
+
+        grouped[group_key]["lines"].append({"account": reason_acc, "amount": amount})
+
+    if row_errors:
+        result["errors"] = row_errors
+        return result
+
+    with transaction.atomic():
+        for group_key, data in grouped.items():
+            vno = data["voucher_no"]
+            cn = CreditNote.objects.filter(voucher_no=vno).first() if vno else None
+            if cn:
+                if not update_existing:
+                    result["vouchers_skipped"] += 1
+                    continue
+                cn.date = data["date"]
+                cn.account = data["account"]
+                cn.against_sale = data["against_sale"]
+                cn.narration = data["narration"]
+                cn.save()
+                cn.lines.all().delete()
+                result["vouchers_updated"] += 1
+            else:
+                cn = CreditNote.objects.create(
+                    voucher_no=vno or "",
+                    date=data["date"],
+                    account=data["account"],
+                    against_sale=data["against_sale"],
+                    narration=data["narration"],
+                )
+                result["vouchers_created"] += 1
+            CreditNoteLine.objects.bulk_create([CreditNoteLine(credit_note=cn, **line) for line in data["lines"]])
+            result["items_count"] += len(data["lines"])
+
+    result["success"] = bool(result["vouchers_created"] or result["vouchers_updated"] or result["vouchers_skipped"])
+    return result
+
+
+# ==============================================================================
+# DEBIT NOTE VOUCHER TEMPLATE & IMPORT
+# ==============================================================================
+
+DEBIT_NOTE_VOUCHER_HEADERS = [
+    "Date *",
+    "Voucher No",
+    "Party (Supplier) *",
+    "Against Purchase Invoice",
+    "Reason Account *",
+    "Amount *",
+    "Narration",
+]
+
+DEBIT_NOTE_SAMPLE_ROWS = [
+    ["2026-09-10", "DN-001", "National Steel Corporation", "PUR-501", "Purchase Return", 4800.00, "Shortage deduction"],
+    ["", "DN-001", "", "", "Discount Received", 200.00, ""],
+    ["2026-09-11", "DN-002", "National Steel Corporation", "", "Purchase Return", 9600.00, "Returned excess stock"],
+]
+
+DEBIT_NOTE_COLUMN_GUIDE = [
+    {"name": "Date *", "type": "Date", "required": True, "description": "Voucher date. Enter on first row of each voucher."},
+    {"name": "Voucher No", "type": "Text", "required": False, "description": "Auto-generated (DN-) if left blank."},
+    {"name": "Party (Supplier) *", "type": "Text", "required": True, "description": "Supplier account being debited. Enter on first row; must already exist."},
+    {"name": "Against Purchase Invoice", "type": "Text", "required": False, "description": "Optional: original purchase invoice number this note relates to."},
+    {"name": "Reason Account *", "type": "Text", "required": True, "description": "Ledger credited by this line (e.g. 'Purchase Return', 'Discount Received'). Must already exist."},
+    {"name": "Amount *", "type": "Number", "required": True, "description": "Positive amount for this reason line."},
+    {"name": "Narration", "type": "Text", "required": False, "description": "Voucher narration; enter on the first row."},
+]
+
+
+def generate_debit_note_template():
+    """Generate and return an in-memory .xlsx template for Debit Note import."""
+    check_openpyxl()
+    from .models import Account, Purchase
+
+    wb = openpyxl.Workbook()
+
+    ws = wb.active
+    ws.title = "Debit Notes"
+    _apply_header_style(ws, DEBIT_NOTE_VOUCHER_HEADERS, bg_color="641E16")
+    for r in DEBIT_NOTE_SAMPLE_ROWS:
+        ws.append(r)
+    _auto_adjust_columns(ws)
+
+    ws_acc = wb.create_sheet(title="Existing Accounts")
+    _apply_header_style(ws_acc, ["Account Name", "Group"], bg_color="366092")
+    for acc in Account.objects.select_related("account_group").order_by("account_name")[:500]:
+        ws_acc.append([acc.account_name, acc.account_group.name if acc.account_group else ""])
+    _auto_adjust_columns(ws_acc)
+
+    ws_pur = wb.create_sheet(title="Existing Purchases (for Against)")
+    _apply_header_style(ws_pur, ["Invoice No", "Date", "Supplier"], bg_color="117A65")
+    for p in Purchase.objects.select_related("account").order_by("-date")[:200]:
+        ws_pur.append([p.invoice_no, str(p.date), p.account.account_name])
+    _auto_adjust_columns(ws_pur)
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+
+def import_debit_notes_from_excel(file_obj, update_existing=False):
+    """
+    Parse an Excel file and import Debit Note Vouchers.
+    Each voucher has one header party (supplier being debited) and one or more
+    reason-ledger lines (accounts credited, e.g. Purchase Return, Discount Received).
+    No Cash/Bank 'Through' account is involved — the party is a trade creditor.
+    """
+    check_openpyxl()
+    from .models import Account, Purchase, DebitNote, DebitNoteLine
+
+    result = _cash_voucher_result()
+    loaded, errors = _load_import_rows(file_obj)
+    if errors:
+        result["errors"] = errors
+        return result
+    rows, header_map = loaded
+    accounts = {a.account_name.lower(): a for a in Account.objects.select_related("account_group").all()}
+    purchase_cache = {p.invoice_no.lower(): p for p in Purchase.objects.all()}
+    grouped, row_errors = {}, []
+
+    _last_voucher_no = ""
+    _last_raw_date = None
+    _last_party_name = ""
+    _last_against_str = ""
+    _last_narration = ""
+
+    for row_number, row in enumerate(rows, start=2):
+        if not any(row):
+            continue
+        result["total_rows"] += 1
+
+        voucher_no = _clean_str(_row_value(row, header_map, "Voucher No", "voucher_no", "Voucher No *"))
+        if not voucher_no:
+            voucher_no = _last_voucher_no
+        _last_voucher_no = voucher_no
+
+        reason_name = _clean_str(_row_value(row, header_map, "Reason Account *", "Reason Account", "Reason", "Account *", "Account"))
+        amount = _parse_decimal(_row_value(row, header_map, "Amount *", "Amount"), Decimal("0"))
+
+        if not reason_name or amount <= 0:
+            row_errors.append(f"Row {row_number} ({voucher_no}): 'Reason Account' and a positive 'Amount' are required on every line.")
+            continue
+
+        reason_acc = accounts.get(reason_name.lower())
+        if not reason_acc:
+            row_errors.append(f"Row {row_number} ({voucher_no}): Reason Account '{reason_name}' does not exist.")
+            continue
+
+        group_key = voucher_no if voucher_no else f"__auto_{row_number}__"
+
+        if group_key not in grouped:
+            party_name = _clean_str(_row_value(row, header_map, "Party (Supplier) *", "Party (Supplier)", "Party", "Supplier"))
+            if not party_name:
+                party_name = _last_party_name
+            else:
+                _last_party_name = party_name
+
+            if not party_name:
+                row_errors.append(f"Row {row_number} ({group_key}): 'Party (Supplier)' is required on the first row of each voucher.")
+                continue
+
+            party_acc = accounts.get(party_name.lower())
+            if not party_acc:
+                row_errors.append(f"Row {row_number} ({group_key}): Party account '{party_name}' does not exist.")
+                continue
+
+            raw_date = _row_value(row, header_map, "Date *", "Date")
+            if raw_date is None or _clean_str(raw_date) == "":
+                raw_date = _last_raw_date
+            else:
+                _last_raw_date = raw_date
+            voucher_date = _parse_date(raw_date)
+            if not voucher_date:
+                row_errors.append(f"Row {row_number} ({group_key}): a valid Date is required on the first row.")
+                continue
+
+            against_str = _clean_str(_row_value(row, header_map, "Against Purchase Invoice", "Against Purchase", "Against Invoice"))
+            if not against_str:
+                against_str = _last_against_str
+            else:
+                _last_against_str = against_str
+            against_obj = purchase_cache.get(against_str.lower()) if against_str else None
+
+            narration = _clean_str(_row_value(row, header_map, "Narration", "Remarks"))
+            if not narration:
+                narration = _last_narration
+            else:
+                _last_narration = narration
+
+            grouped[group_key] = {
+                "voucher_no": voucher_no,
+                "date": voucher_date,
+                "account": party_acc,
+                "against_purchase": against_obj,
+                "narration": narration,
+                "lines": [],
+            }
+
+        grouped[group_key]["lines"].append({"account": reason_acc, "amount": amount})
+
+    if row_errors:
+        result["errors"] = row_errors
+        return result
+
+    with transaction.atomic():
+        for group_key, data in grouped.items():
+            vno = data["voucher_no"]
+            dn = DebitNote.objects.filter(voucher_no=vno).first() if vno else None
+            if dn:
+                if not update_existing:
+                    result["vouchers_skipped"] += 1
+                    continue
+                dn.date = data["date"]
+                dn.account = data["account"]
+                dn.against_purchase = data["against_purchase"]
+                dn.narration = data["narration"]
+                dn.save()
+                dn.lines.all().delete()
+                result["vouchers_updated"] += 1
+            else:
+                dn = DebitNote.objects.create(
+                    voucher_no=vno or "",
+                    date=data["date"],
+                    account=data["account"],
+                    against_purchase=data["against_purchase"],
+                    narration=data["narration"],
+                )
+                result["vouchers_created"] += 1
+            DebitNoteLine.objects.bulk_create([DebitNoteLine(debit_note=dn, **line) for line in data["lines"]])
+            result["items_count"] += len(data["lines"])
+
+    result["success"] = bool(result["vouchers_created"] or result["vouchers_updated"] or result["vouchers_skipped"])
+    return result
+
+
 def import_journals_from_excel(file_obj, update_existing=False):
     check_openpyxl()
     from .models import Account, Journal, JournalLine

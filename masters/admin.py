@@ -56,12 +56,22 @@ from .excel_service import (
     import_sales_from_excel,
     generate_purchase_template,
     import_purchases_from_excel,
+    generate_sale_return_template,
+    import_sale_returns_from_excel,
+    generate_purchase_return_template,
+    import_purchase_returns_from_excel,
     generate_payment_template,
     import_payments_from_excel,
     generate_receipt_template,
     import_receipts_from_excel,
     generate_journal_template,
     import_journals_from_excel,
+    generate_credit_note_template,
+    import_credit_notes_from_excel,
+    CREDIT_NOTE_COLUMN_GUIDE,
+    generate_debit_note_template,
+    import_debit_notes_from_excel,
+    DEBIT_NOTE_COLUMN_GUIDE,
     excel_download_response,
 )
 from .reports import (
@@ -647,6 +657,49 @@ JOURNAL_COLUMN_GUIDE = [
 ]
 
 
+SALE_RETURN_COLUMN_GUIDE = [
+    {"name": "Date *", "type": "Date", "required": True, "description": "Voucher date (e.g. '2026-09-01' or DD-MM-YYYY)."},
+    {"name": "Voucher No", "type": "Text", "required": False, "description": "Return voucher number (e.g. 'SR-001'). Auto-generated if blank. Multiple rows with the same voucher no form a multi-item return."},
+    {"name": "Party (Customer) *", "type": "Text", "required": True, "description": "Customer Account Name. Must already exist in database."},
+    {"name": "Sale Type", "type": "Text", "required": False, "description": "Sale Type name. If blank, uses selected default on upload."},
+    {"name": "Against Sale Invoice", "type": "Text", "required": False, "description": "Optional: the original sale invoice number this return is against."},
+    {"name": "Item Name *", "type": "Text", "required": True, "description": "Stock item name. Must already exist in database."},
+    {"name": "Unit", "type": "Text", "required": False, "description": "Unit name. If blank, uses item's main unit."},
+    {"name": "Quantity *", "type": "Number", "required": True, "description": "Returned quantity (must be > 0)."},
+    {"name": "Rate", "type": "Number", "required": False, "description": "Item rate. If blank, defaults to item master Sale Price."},
+    {"name": "Discount", "type": "Number", "required": False, "description": "Discount amount for this line (default 0)."},
+    {"name": "Tax Rate %", "type": "Number", "required": False, "description": "Tax percentage. If blank, defaults to item master tax rate."},
+    {"name": "Bill Sundry 1", "type": "Text", "required": False, "description": "Bill sundry 1 (e.g. 'Rounded Off'). Must exist in database."},
+    {"name": "Sundry Amount 1", "type": "Number", "required": False, "description": "Amount for sundry 1, or 0 for auto-formula."},
+    {"name": "Bill Sundry 2", "type": "Text", "required": False, "description": "Bill sundry 2 (optional)."},
+    {"name": "Sundry Amount 2", "type": "Number", "required": False, "description": "Amount for sundry 2, or 0 for auto-formula."},
+    {"name": "Bill Sundry 3", "type": "Text", "required": False, "description": "Bill sundry 3 (optional)."},
+    {"name": "Sundry Amount 3", "type": "Number", "required": False, "description": "Amount for sundry 3, or 0 for auto-formula."},
+    {"name": "Narration", "type": "Text", "required": False, "description": "Remarks or notes on the return."},
+]
+
+PURCHASE_RETURN_COLUMN_GUIDE = [
+    {"name": "Date *", "type": "Date", "required": True, "description": "Voucher date (e.g. '2026-09-01' or DD-MM-YYYY)."},
+    {"name": "Voucher No", "type": "Text", "required": False, "description": "Return voucher number (e.g. 'PR-001'). Auto-generated if blank. Multiple rows with the same voucher no form a multi-item return."},
+    {"name": "Party (Supplier) *", "type": "Text", "required": True, "description": "Supplier Account Name. Must already exist in database."},
+    {"name": "Purchase Type", "type": "Text", "required": False, "description": "Purchase Type name. If blank, uses selected default on upload."},
+    {"name": "Against Purchase Invoice", "type": "Text", "required": False, "description": "Optional: the original purchase invoice number this return is against."},
+    {"name": "Item Name *", "type": "Text", "required": True, "description": "Stock item name. Must already exist in database."},
+    {"name": "Unit", "type": "Text", "required": False, "description": "Unit name. If blank, uses item's main unit."},
+    {"name": "Quantity *", "type": "Number", "required": True, "description": "Returned quantity (must be > 0)."},
+    {"name": "Rate", "type": "Number", "required": False, "description": "Item rate. If blank, defaults to item master Purchase Price."},
+    {"name": "Discount", "type": "Number", "required": False, "description": "Discount amount for this line (default 0)."},
+    {"name": "Tax Rate %", "type": "Number", "required": False, "description": "Tax percentage. If blank, defaults to item master tax rate."},
+    {"name": "Bill Sundry 1", "type": "Text", "required": False, "description": "Bill sundry 1 (optional). Must exist in database."},
+    {"name": "Sundry Amount 1", "type": "Number", "required": False, "description": "Amount for sundry 1, or 0 for auto-formula."},
+    {"name": "Bill Sundry 2", "type": "Text", "required": False, "description": "Bill sundry 2 (optional)."},
+    {"name": "Sundry Amount 2", "type": "Number", "required": False, "description": "Amount for sundry 2, or 0 for auto-formula."},
+    {"name": "Bill Sundry 3", "type": "Text", "required": False, "description": "Bill sundry 3 (optional)."},
+    {"name": "Sundry Amount 3", "type": "Number", "required": False, "description": "Amount for sundry 3, or 0 for auto-formula."},
+    {"name": "Narration", "type": "Text", "required": False, "description": "Remarks or notes on the return."},
+]
+
+
 def sale_template_view(request):
     if not OPENPYXL_AVAILABLE:
         messages.error(request, "openpyxl is not installed. Please install it using: pip install openpyxl")
@@ -805,6 +858,168 @@ def journal_import_view(request):
     return _cash_import_view(request, title="Import Journal Vouchers from Excel", model_name="Journal Voucher", model_plural="Journal Vouchers", changelist_url=reverse("admin:masters_journal_changelist"), template_url=reverse("admin:erp_journal_template"), column_guide=JOURNAL_COLUMN_GUIDE, import_func=import_journals_from_excel)
 
 
+# =========================================================
+# SALE RETURN IMPORT VIEWS
+# =========================================================
+
+def sale_return_template_view(request):
+    if not OPENPYXL_AVAILABLE:
+        messages.error(request, "openpyxl is not installed. Please install it using: pip install openpyxl")
+        return HttpResponseRedirect(reverse("admin:erp_sale_return_import"))
+    buffer = generate_sale_return_template()
+    return excel_download_response(buffer, "Sale_Return_Import_Template.xlsx")
+
+
+def sale_return_import_view(request):
+    sale_types = SaleType.objects.all().order_by("name")
+    ctx = {
+        **admin.site.each_context(request),
+        "title": "Import Sale Return Vouchers from Excel",
+        "model_name": "Sale Return Voucher",
+        "model_name_plural": "Sale Returns",
+        "type_label": "Default Sale Type",
+        "type_choices": sale_types,
+        "changelist_url": reverse("admin:masters_salereturn_changelist"),
+        "template_url": reverse("admin:erp_sale_return_template"),
+        "column_guide": SALE_RETURN_COLUMN_GUIDE,
+        "package_missing": not OPENPYXL_AVAILABLE,
+        "show_type_selector": True,
+        "result": None,
+    }
+    if request.method == "POST":
+        if not OPENPYXL_AVAILABLE:
+            messages.error(request, "openpyxl is not installed. Please install it using: pip install openpyxl")
+            return TemplateResponse(request, "admin/masters/import_voucher_excel.html", ctx)
+        excel_file = request.FILES.get("excel_file")
+        if not excel_file:
+            messages.error(request, "Please choose an Excel file to upload.")
+            return TemplateResponse(request, "admin/masters/import_voucher_excel.html", ctx)
+        default_type_id = request.POST.get("default_type_id") or None
+        update_existing = request.POST.get("update_existing") == "1"
+        result = import_sale_returns_from_excel(
+            excel_file,
+            default_sale_type_id=default_type_id,
+            update_existing=update_existing,
+        )
+        ctx["result"] = result
+        if result["errors"]:
+            messages.warning(
+                request,
+                f"Import completed with {len(result['errors'])} error(s). Please review details below."
+            )
+        else:
+            messages.success(
+                request,
+                f"Successfully processed sale return vouchers! Created: {result['vouchers_created']}, Updated: {result['vouchers_updated']}, Skipped: {result['vouchers_skipped']} ({result['items_count']} item lines)."
+            )
+    return TemplateResponse(request, "admin/masters/import_voucher_excel.html", ctx)
+
+
+# =========================================================
+# PURCHASE RETURN IMPORT VIEWS
+# =========================================================
+
+def purchase_return_template_view(request):
+    if not OPENPYXL_AVAILABLE:
+        messages.error(request, "openpyxl is not installed. Please install it using: pip install openpyxl")
+        return HttpResponseRedirect(reverse("admin:erp_purchase_return_import"))
+    buffer = generate_purchase_return_template()
+    return excel_download_response(buffer, "Purchase_Return_Import_Template.xlsx")
+
+
+def purchase_return_import_view(request):
+    purchase_types = PurchaseType.objects.all().order_by("name")
+    ctx = {
+        **admin.site.each_context(request),
+        "title": "Import Purchase Return Vouchers from Excel",
+        "model_name": "Purchase Return Voucher",
+        "model_name_plural": "Purchase Returns",
+        "type_label": "Default Purchase Type",
+        "type_choices": purchase_types,
+        "changelist_url": reverse("admin:masters_purchasereturn_changelist"),
+        "template_url": reverse("admin:erp_purchase_return_template"),
+        "column_guide": PURCHASE_RETURN_COLUMN_GUIDE,
+        "package_missing": not OPENPYXL_AVAILABLE,
+        "show_type_selector": True,
+        "result": None,
+    }
+    if request.method == "POST":
+        if not OPENPYXL_AVAILABLE:
+            messages.error(request, "openpyxl is not installed. Please install it using: pip install openpyxl")
+            return TemplateResponse(request, "admin/masters/import_voucher_excel.html", ctx)
+        excel_file = request.FILES.get("excel_file")
+        if not excel_file:
+            messages.error(request, "Please choose an Excel file to upload.")
+            return TemplateResponse(request, "admin/masters/import_voucher_excel.html", ctx)
+        default_type_id = request.POST.get("default_type_id") or None
+        update_existing = request.POST.get("update_existing") == "1"
+        result = import_purchase_returns_from_excel(
+            excel_file,
+            default_purchase_type_id=default_type_id,
+            update_existing=update_existing,
+        )
+        ctx["result"] = result
+        if result["errors"]:
+            messages.warning(
+                request,
+                f"Import completed with {len(result['errors'])} error(s). Please review details below."
+            )
+        else:
+            messages.success(
+                request,
+                f"Successfully processed purchase return vouchers! Created: {result['vouchers_created']}, Updated: {result['vouchers_updated']}, Skipped: {result['vouchers_skipped']} ({result['items_count']} item lines)."
+            )
+    return TemplateResponse(request, "admin/masters/import_voucher_excel.html", ctx)
+
+
+# =========================================================
+# CREDIT NOTE IMPORT VIEWS
+# =========================================================
+
+def credit_note_template_view(request):
+    if not OPENPYXL_AVAILABLE:
+        messages.error(request, "openpyxl is not installed. Please install it using: pip install openpyxl")
+        return HttpResponseRedirect(reverse("admin:erp_credit_note_import"))
+    return excel_download_response(generate_credit_note_template(), "Credit_Note_Import_Template.xlsx")
+
+
+def credit_note_import_view(request):
+    return _cash_import_view(
+        request,
+        title="Import Credit Notes from Excel",
+        model_name="Credit Note",
+        model_plural="Credit Notes",
+        changelist_url=reverse("admin:masters_creditnote_changelist"),
+        template_url=reverse("admin:erp_credit_note_template"),
+        column_guide=CREDIT_NOTE_COLUMN_GUIDE,
+        import_func=import_credit_notes_from_excel,
+    )
+
+
+# =========================================================
+# DEBIT NOTE IMPORT VIEWS
+# =========================================================
+
+def debit_note_template_view(request):
+    if not OPENPYXL_AVAILABLE:
+        messages.error(request, "openpyxl is not installed. Please install it using: pip install openpyxl")
+        return HttpResponseRedirect(reverse("admin:erp_debit_note_import"))
+    return excel_download_response(generate_debit_note_template(), "Debit_Note_Import_Template.xlsx")
+
+
+def debit_note_import_view(request):
+    return _cash_import_view(
+        request,
+        title="Import Debit Notes from Excel",
+        model_name="Debit Note",
+        model_plural="Debit Notes",
+        changelist_url=reverse("admin:masters_debitnote_changelist"),
+        template_url=reverse("admin:erp_debit_note_template"),
+        column_guide=DEBIT_NOTE_COLUMN_GUIDE,
+        import_func=import_debit_notes_from_excel,
+    )
+
+
 if not getattr(admin.site, "_erp_urls_patched", False):
     _original_get_urls = admin.site.get_urls
 
@@ -956,6 +1171,14 @@ if not getattr(admin.site, "_erp_urls_patched", False):
             path("masters/receipt/import/", admin.site.admin_view(receipt_import_view), name="erp_receipt_import"),
             path("masters/journal/template/", admin.site.admin_view(journal_template_view), name="erp_journal_template"),
             path("masters/journal/import/", admin.site.admin_view(journal_import_view), name="erp_journal_import"),
+            path("masters/sale-return/template/", admin.site.admin_view(sale_return_template_view), name="erp_sale_return_template"),
+            path("masters/sale-return/import/", admin.site.admin_view(sale_return_import_view), name="erp_sale_return_import"),
+            path("masters/purchase-return/template/", admin.site.admin_view(purchase_return_template_view), name="erp_purchase_return_template"),
+            path("masters/purchase-return/import/", admin.site.admin_view(purchase_return_import_view), name="erp_purchase_return_import"),
+            path("masters/credit-note/template/", admin.site.admin_view(credit_note_template_view), name="erp_credit_note_template"),
+            path("masters/credit-note/import/", admin.site.admin_view(credit_note_import_view), name="erp_credit_note_import"),
+            path("masters/debit-note/template/", admin.site.admin_view(debit_note_template_view), name="erp_debit_note_template"),
+            path("masters/debit-note/import/", admin.site.admin_view(debit_note_import_view), name="erp_debit_note_import"),
         ] + _original_get_urls()
 
     admin.site.get_urls = _get_urls
@@ -1627,6 +1850,7 @@ class PurchaseAdmin(VoucherAdminMixin, admin.ModelAdmin):
 
 @admin.register(SaleReturn)
 class SaleReturnAdmin(VoucherAdminMixin, admin.ModelAdmin):
+    change_list_template = "admin/masters/salereturn/change_list.html"
     list_display = ("voucher_no", "date", "sale_type", "account", "against_sale", "net_amount_list")
     search_fields = ("voucher_no", "account__account_name", "against_sale__invoice_no")
     list_filter = ("date", "sale_type")
@@ -1666,6 +1890,7 @@ class SaleReturnAdmin(VoucherAdminMixin, admin.ModelAdmin):
 
 @admin.register(PurchaseReturn)
 class PurchaseReturnAdmin(VoucherAdminMixin, admin.ModelAdmin):
+    change_list_template = "admin/masters/purchasereturn/change_list.html"
     list_display = ("voucher_no", "date", "purchase_type", "account", "against_purchase", "net_amount_list")
     search_fields = ("voucher_no", "account__account_name", "against_purchase__invoice_no")
     list_filter = ("date", "purchase_type")
@@ -1770,6 +1995,7 @@ class PartyNoteAdmin(admin.ModelAdmin):
 
 @admin.register(CreditNote)
 class CreditNoteAdmin(PartyNoteAdmin):
+    change_list_template = "admin/masters/creditnote/change_list.html"
     autocomplete_fields = ("account", "against_sale")
     inlines = [CreditNoteLineInline]
     fieldsets = (
@@ -1783,6 +2009,7 @@ class CreditNoteAdmin(PartyNoteAdmin):
 
 @admin.register(DebitNote)
 class DebitNoteAdmin(PartyNoteAdmin):
+    change_list_template = "admin/masters/debitnote/change_list.html"
     autocomplete_fields = ("account", "against_purchase")
     inlines = [DebitNoteLineInline]
     fieldsets = (
