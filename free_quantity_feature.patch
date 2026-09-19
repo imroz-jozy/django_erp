@@ -1,0 +1,577 @@
+diff --git a/masters/admin.py b/masters/admin.py
+index ae7be59..b1cf279 100644
+--- a/masters/admin.py
++++ b/masters/admin.py
+@@ -591,7 +591,8 @@ SALE_COLUMN_GUIDE = [
+     {"name": "Sale Type", "type": "Text", "required": False, "description": "Sale Type name (e.g. 'Local Sale'). If left blank, uses selected default on upload."},
+     {"name": "Item Name *", "type": "Text", "required": True, "description": "Stock item name. Must already exist in database."},
+     {"name": "Unit", "type": "Text", "required": False, "description": "Unit name (e.g. PCS). If blank, uses item's main unit."},
+-    {"name": "Quantity *", "type": "Number", "required": True, "description": "Billed quantity (must be > 0)."},
++    {"name": "Quantity *", "type": "Number or Text", "required": True, "description": "Billed quantity (must be > 0). Also accepts a '10+2' scheme (10 billed + 2 free) directly in this cell."},
++    {"name": "Free Qty", "type": "Number", "required": False, "description": "Free quantity for this line, if not already written inline as '10+2' in Quantity (default 0)."},
+     {"name": "Rate", "type": "Number", "required": False, "description": "Item rate. If blank, defaults to item master Sale Price. Enter 0 to import a zero rate."},
+     {"name": "Discount", "type": "Number", "required": False, "description": "Discount amount for this line (default 0)."},
+     {"name": "Tax Rate %", "type": "Number", "required": False, "description": "Tax percentage. If blank, defaults to item master tax rate."},
+@@ -611,7 +612,8 @@ PURCHASE_COLUMN_GUIDE = [
+     {"name": "Purchase Type", "type": "Text", "required": False, "description": "Purchase Type name (e.g. 'Local Purchase'). If left blank, uses selected default on upload."},
+     {"name": "Item Name *", "type": "Text", "required": True, "description": "Stock item name. Must already exist in database."},
+     {"name": "Unit", "type": "Text", "required": False, "description": "Unit name (e.g. PCS). If blank, uses item's main unit."},
+-    {"name": "Quantity *", "type": "Number", "required": True, "description": "Billed quantity (must be > 0)."},
++    {"name": "Quantity *", "type": "Number or Text", "required": True, "description": "Billed quantity (must be > 0). Also accepts a '10+2' scheme (10 billed + 2 free) directly in this cell."},
++    {"name": "Free Qty", "type": "Number", "required": False, "description": "Free quantity for this line, if not already written inline as '10+2' in Quantity (default 0)."},
+     {"name": "Rate", "type": "Number", "required": False, "description": "Item rate. If blank, defaults to item master Purchase Price. Enter 0 to import a zero rate."},
+     {"name": "Discount", "type": "Number", "required": False, "description": "Discount amount for this line (default 0)."},
+     {"name": "Tax Rate %", "type": "Number", "required": False, "description": "Tax percentage. If blank, defaults to item master tax rate."},
+@@ -1189,15 +1191,119 @@ if not getattr(admin.site, "_erp_urls_patched", False):
+ # INLINES
+ # =========================================================
+ 
++import re as _re
++from decimal import Decimal as _Decimal, InvalidOperation as _InvalidOperation
++
++_QTY_INPUT_RE = _re.compile(r"^\s*([0-9]*\.?[0-9]+)\s*(?:\+\s*([0-9]*\.?[0-9]+))?\s*$")
++
++
++def _parse_qty_input(raw):
++    """Parse the Quantity box's text: a plain number ('10') or a Busy/Tally
++    style free-quantity scheme ('10+2' = 10 billed + 2 free). Raises
++    forms.ValidationError on anything else, so it surfaces as a normal
++    field error in the admin form."""
++    text = ("" if raw is None else str(raw)).strip()
++    if not text:
++        raise forms.ValidationError("Quantity is required.")
++    match = _QTY_INPUT_RE.match(text)
++    if not match:
++        raise forms.ValidationError(
++            "Enter a quantity, or 'billed+free' for a scheme, e.g. '10+2' for "
++            "10 billed and 2 free."
++        )
++    try:
++        billed = _Decimal(match.group(1))
++        free = _Decimal(match.group(2)) if match.group(2) else _Decimal("0")
++    except _InvalidOperation:
++        raise forms.ValidationError("Enter valid numbers, e.g. '10+2'.")
++    if billed <= 0:
++        raise forms.ValidationError("Billed quantity must be greater than 0.")
++    if free < 0:
++        raise forms.ValidationError("Free quantity cannot be negative.")
++    return billed, free
++
++
++def _format_qty_display(quantity, free_quantity):
++    """Render existing (quantity, free_quantity) back as '10+2' (or plain
++    '10' when there's no free quantity), so re-opening a saved line shows
++    the same scheme notation it was entered in."""
++    def _trim(d):
++        d = (d or _Decimal("0")).normalize()
++        if d == d.to_integral():
++            return str(d.quantize(_Decimal(1)))
++        return format(d, "f")
++
++    q = _trim(quantity)
++    f = free_quantity or _Decimal("0")
++    return f"{q}+{_trim(f)}" if f else q
++
++
++class QuantityWithFreeSchemeForm(forms.ModelForm):
++    """Shared by the Sale/Purchase/Sale-Return/Purchase-Return item inline
++    forms: replaces the plain Quantity number box with a single text box
++    that accepts '10+2' (10 billed + 2 free), splitting it into the
++    quantity/free_quantity model fields on save."""
++
++    quantity = forms.CharField(
++        label="Quantity",
++        required=True,
++        widget=forms.TextInput(attrs={"style": "width: 6em;", "placeholder": "10 or 10+2"}),
++        help_text="Plain qty, or 'billed+free' for a scheme, e.g. '10+2'.",
++    )
++
++    def __init__(self, *args, **kwargs):
++        super().__init__(*args, **kwargs)
++        if self.instance and self.instance.pk:
++            self.initial["quantity"] = _format_qty_display(
++                self.instance.quantity, self.instance.free_quantity
++            )
++
++    def clean_quantity(self):
++        billed, free = _parse_qty_input(self.cleaned_data.get("quantity"))
++        # free_quantity isn't one of this form's fields (see each inline's
++        # `fields`), so construct_instance() won't touch it - setting it
++        # directly here is what actually persists it.
++        self.instance.free_quantity = free
++        return billed
++
++
++class SaleItemForm(QuantityWithFreeSchemeForm):
++    class Meta:
++        model = SaleItem
++        # Deliberately excludes free_quantity: clean_quantity() above sets
++        # it on the instance directly from the "10+2" text in Quantity.
++        fields = ("item", "unit", "quantity", "rate", "discount", "tax")
++
++
++class PurchaseItemForm(QuantityWithFreeSchemeForm):
++    class Meta:
++        model = PurchaseItem
++        fields = ("item", "unit", "quantity", "rate", "discount", "tax")
++
++
++class SaleReturnItemForm(QuantityWithFreeSchemeForm):
++    class Meta:
++        model = SaleReturnItem
++        fields = ("item", "unit", "quantity", "rate", "discount", "tax")
++
++
++class PurchaseReturnItemForm(QuantityWithFreeSchemeForm):
++    class Meta:
++        model = PurchaseReturnItem
++        fields = ("item", "unit", "quantity", "rate", "discount", "tax")
++
++
+ class SaleItemInline(admin.TabularInline):
+     model = SaleItem
++    form = SaleItemForm
+     extra = 1
+     autocomplete_fields = ("item", "unit")
+-    readonly_fields = ("basic_amount", "amount_after_discount", "tax_amount", "net_amount")
++    readonly_fields = ("total_quantity", "basic_amount", "amount_after_discount", "tax_amount", "net_amount")
+     fields = (
+         "item",
+         "unit",
+         "quantity",
++        "total_quantity",
+         "rate",
+         "discount",
+         "tax",
+@@ -1216,13 +1322,15 @@ class SaleBillSundryInline(admin.TabularInline):
+ 
+ class PurchaseItemInline(admin.TabularInline):
+     model = PurchaseItem
++    form = PurchaseItemForm
+     extra = 1
+     autocomplete_fields = ("item", "unit")
+-    readonly_fields = ("basic_amount", "amount_after_discount", "tax_amount", "net_amount")
++    readonly_fields = ("total_quantity", "basic_amount", "amount_after_discount", "tax_amount", "net_amount")
+     fields = (
+         "item",
+         "unit",
+         "quantity",
++        "total_quantity",
+         "rate",
+         "discount",
+         "tax",
+@@ -1241,13 +1349,15 @@ class PurchaseBillSundryInline(admin.TabularInline):
+ 
+ class SaleReturnItemInline(admin.TabularInline):
+     model = SaleReturnItem
++    form = SaleReturnItemForm
+     extra = 1
+     autocomplete_fields = ("item", "unit")
+-    readonly_fields = ("basic_amount", "amount_after_discount", "tax_amount", "net_amount")
++    readonly_fields = ("total_quantity", "basic_amount", "amount_after_discount", "tax_amount", "net_amount")
+     fields = (
+         "item",
+         "unit",
+         "quantity",
++        "total_quantity",
+         "rate",
+         "discount",
+         "tax",
+@@ -1266,13 +1376,15 @@ class SaleReturnBillSundryInline(admin.TabularInline):
+ 
+ class PurchaseReturnItemInline(admin.TabularInline):
+     model = PurchaseReturnItem
++    form = PurchaseReturnItemForm
+     extra = 1
+     autocomplete_fields = ("item", "unit")
+-    readonly_fields = ("basic_amount", "amount_after_discount", "tax_amount", "net_amount")
++    readonly_fields = ("total_quantity", "basic_amount", "amount_after_discount", "tax_amount", "net_amount")
+     fields = (
+         "item",
+         "unit",
+         "quantity",
++        "total_quantity",
+         "rate",
+         "discount",
+         "tax",
+diff --git a/masters/excel_service.py b/masters/excel_service.py
+index d5f2e99..b627154 100644
+--- a/masters/excel_service.py
++++ b/masters/excel_service.py
+@@ -189,6 +189,23 @@ def _parse_decimal(val, default=Decimal("0")):
+         return default
+ 
+ 
++def _parse_qty_cell(val):
++    """Parse a Quantity cell that may be a plain number (10) or a Busy/Tally
++    style '10+2' free-quantity scheme entered as text (10 billed + 2 free).
++    Returns (billed_quantity, free_quantity_from_cell) as Decimals. The '+'
++    must be split out here rather than handed to _parse_decimal, which would
++    otherwise strip the '+' and misread '10+2' as 102."""
++    if val is None or val == "":
++        return Decimal("0"), Decimal("0")
++    if isinstance(val, (int, float, Decimal)):
++        return _parse_decimal(val), Decimal("0")
++    text = str(val).strip()
++    if "+" in text:
++        billed_part, _, free_part = text.partition("+")
++        return _parse_decimal(billed_part), _parse_decimal(free_part)
++    return _parse_decimal(text), Decimal("0")
++
++
+ def _clean_str(val):
+     if val is None:
+         return ""
+@@ -868,6 +885,7 @@ SALE_VOUCHER_HEADERS = [
+     "Item Name *",
+     "Unit",
+     "Quantity *",
++    "Free Qty",
+     "Rate",
+     "Discount",
+     "Tax Rate %",
+@@ -889,6 +907,7 @@ SALE_SAMPLE_ROWS = [
+         "Laptop Dell Inspiron 15",
+         "PCS",
+         2,
++        0,
+         55000.00,
+         0.00,
+         18,
+@@ -907,7 +926,8 @@ SALE_SAMPLE_ROWS = [
+         "Local Sale",
+         "Cotton T-Shirt Blue M",
+         "PCS",
+-        5,
++        10,
++        2,
+         499.00,
+         50.00,
+         5,
+@@ -917,7 +937,7 @@ SALE_SAMPLE_ROWS = [
+         0.00,
+         "",
+         0.00,
+-        "",
++        "10+2 free scheme - billed qty 10, 2 free",
+     ],
+     [
+         "2026-09-02",
+@@ -927,6 +947,7 @@ SALE_SAMPLE_ROWS = [
+         "Basmati Rice Royal 25kg",
+         "BAG",
+         10,
++        0,
+         2200.00,
+         0.00,
+         0,
+@@ -1096,7 +1117,11 @@ def import_sales_from_excel(file_obj, default_sale_type_id=None, update_existing
+ 
+         item_str = _clean_str(get_val(row, "Item Name *", "Item Name", "Item", "item_name", "item"))
+         unit_str = _clean_str(get_val(row, "Unit", "unit"))
+-        qty_val = _parse_decimal(get_val(row, "Quantity *", "Quantity", "Qty", "quantity"), Decimal("0"))
++        qty_val, inline_free_qty = _parse_qty_cell(get_val(row, "Quantity *", "Quantity", "Qty", "quantity"))
++        explicit_free_qty = get_val(row, "Free Qty", "Free Quantity", "free_qty", "free_quantity")
++        # Either write it inline as "10+2" in the Quantity cell, or use the
++        # separate Free Qty column - whichever the sheet actually has wins.
++        free_qty_val = _parse_decimal(explicit_free_qty) if explicit_free_qty not in (None, "") else inline_free_qty
+         rate_val = _parse_decimal(get_val(row, "Rate", "rate", "Price"), None)
+         discount_val = _parse_decimal(get_val(row, "Discount", "disc", "discount"), Decimal("0"))
+         tax_val = _parse_decimal(get_val(row, "Tax Rate %", "Tax Rate", "Tax", "tax"), None)
+@@ -1119,6 +1144,10 @@ def import_sales_from_excel(file_obj, default_sale_type_id=None, update_existing
+             row_errors.append(f"Row {row_idx} (Inv {inv_no}): Quantity must be greater than 0.")
+             continue
+ 
++        if free_qty_val < 0:
++            row_errors.append(f"Row {row_idx} (Inv {inv_no}): 'Free Qty' cannot be negative.")
++            continue
++
+         # Rate defaults to item sale price if not given
+         if rate_val is None:
+             rate_val = item_obj.sale_price
+@@ -1177,6 +1206,7 @@ def import_sales_from_excel(file_obj, default_sale_type_id=None, update_existing
+             "item": item_obj,
+             "unit": unit_obj,
+             "quantity": qty_val,
++            "free_quantity": free_qty_val,
+             "rate": rate_val,
+             "discount": discount_val,
+             "tax": tax_val,
+@@ -1250,6 +1280,7 @@ def import_sales_from_excel(file_obj, default_sale_type_id=None, update_existing
+                     item=itm["item"],
+                     unit=itm["unit"],
+                     quantity=itm["quantity"],
++                    free_quantity=itm["free_quantity"],
+                     rate=itm["rate"],
+                     discount=itm["discount"],
+                     tax=itm["tax"],
+@@ -1282,6 +1313,7 @@ PURCHASE_VOUCHER_HEADERS = [
+     "Item Name *",
+     "Unit",
+     "Quantity *",
++    "Free Qty",
+     "Rate",
+     "Discount",
+     "Tax Rate %",
+@@ -1304,6 +1336,7 @@ PURCHASE_SAMPLE_ROWS = [
+         "Laptop Dell Inspiron 15",
+         "PCS",
+         5,
++        0,
+         48000.00,
+         0.00,
+         18,
+@@ -1324,6 +1357,7 @@ PURCHASE_SAMPLE_ROWS = [
+         "Cotton T-Shirt Blue M",
+         "PCS",
+         20,
++        2,
+         320.00,
+         0.00,
+         5,
+@@ -1333,7 +1367,7 @@ PURCHASE_SAMPLE_ROWS = [
+         0.00,
+         "",
+         0.00,
+-        "",
++        "10+2 free scheme from supplier",
+     ],
+     [
+         "2026-09-02",
+@@ -1344,6 +1378,7 @@ PURCHASE_SAMPLE_ROWS = [
+         "Basmati Rice Royal 25kg",
+         "BAG",
+         25,
++        0,
+         1950.00,
+         500.00,
+         0,
+@@ -1520,7 +1555,9 @@ def import_purchases_from_excel(file_obj, default_purchase_type_id=None, update_
+ 
+         item_str = _clean_str(get_val(row, "Item Name *", "Item Name", "Item", "item_name", "item"))
+         unit_str = _clean_str(get_val(row, "Unit", "unit"))
+-        qty_val = _parse_decimal(get_val(row, "Quantity *", "Quantity", "Qty", "quantity"), Decimal("0"))
++        qty_val, inline_free_qty = _parse_qty_cell(get_val(row, "Quantity *", "Quantity", "Qty", "quantity"))
++        explicit_free_qty = get_val(row, "Free Qty", "Free Quantity", "free_qty", "free_quantity")
++        free_qty_val = _parse_decimal(explicit_free_qty) if explicit_free_qty not in (None, "") else inline_free_qty
+         rate_val = _parse_decimal(get_val(row, "Rate", "rate", "Price"), None)
+         discount_val = _parse_decimal(get_val(row, "Discount", "disc", "discount"), Decimal("0"))
+         tax_val = _parse_decimal(get_val(row, "Tax Rate %", "Tax Rate", "Tax", "tax"), None)
+@@ -1542,6 +1579,10 @@ def import_purchases_from_excel(file_obj, default_purchase_type_id=None, update_
+             row_errors.append(f"Row {row_idx} (Inv {inv_no}): Quantity must be greater than 0.")
+             continue
+ 
++        if free_qty_val < 0:
++            row_errors.append(f"Row {row_idx} (Inv {inv_no}): 'Free Qty' cannot be negative.")
++            continue
++
+         if rate_val is None:
+             rate_val = item_obj.purchase_price
+ 
+@@ -1596,6 +1637,7 @@ def import_purchases_from_excel(file_obj, default_purchase_type_id=None, update_
+             "item": item_obj,
+             "unit": unit_obj,
+             "quantity": qty_val,
++            "free_quantity": free_qty_val,
+             "rate": rate_val,
+             "discount": discount_val,
+             "tax": tax_val,
+@@ -1667,6 +1709,7 @@ def import_purchases_from_excel(file_obj, default_purchase_type_id=None, update_
+                     item=itm["item"],
+                     unit=itm["unit"],
+                     quantity=itm["quantity"],
++                    free_quantity=itm["free_quantity"],
+                     rate=itm["rate"],
+                     discount=itm["discount"],
+                     tax=itm["tax"],
+diff --git a/masters/migrations/0007_purchaseitem_free_quantity_and_more.py b/masters/migrations/0007_purchaseitem_free_quantity_and_more.py
+new file mode 100644
+index 0000000..007dd14
+--- /dev/null
++++ b/masters/migrations/0007_purchaseitem_free_quantity_and_more.py
+@@ -0,0 +1,33 @@
++# Generated by Django 5.2.17 on 2026-09-19 03:32
++
++from django.db import migrations, models
++
++
++class Migration(migrations.Migration):
++
++    dependencies = [
++        ('masters', '0006_item_cess_rate_purchase_is_reverse_charge_and_more'),
++    ]
++
++    operations = [
++        migrations.AddField(
++            model_name='purchaseitem',
++            name='free_quantity',
++            field=models.DecimalField(decimal_places=2, default=0, help_text="Extra quantity given free with this line (e.g. a '10+2' scheme: enter 10 in Quantity and 2 here). Free quantity moves stock in/out like the billed quantity, but is never billed or taxed — it plays no part in Basic Amount or any amount calculated from it.", max_digits=15),
++        ),
++        migrations.AddField(
++            model_name='purchasereturnitem',
++            name='free_quantity',
++            field=models.DecimalField(decimal_places=2, default=0, help_text="Extra quantity given free with this line (e.g. a '10+2' scheme: enter 10 in Quantity and 2 here). Free quantity moves stock in/out like the billed quantity, but is never billed or taxed — it plays no part in Basic Amount or any amount calculated from it.", max_digits=15),
++        ),
++        migrations.AddField(
++            model_name='saleitem',
++            name='free_quantity',
++            field=models.DecimalField(decimal_places=2, default=0, help_text="Extra quantity given free with this line (e.g. a '10+2' scheme: enter 10 in Quantity and 2 here). Free quantity moves stock in/out like the billed quantity, but is never billed or taxed — it plays no part in Basic Amount or any amount calculated from it.", max_digits=15),
++        ),
++        migrations.AddField(
++            model_name='salereturnitem',
++            name='free_quantity',
++            field=models.DecimalField(decimal_places=2, default=0, help_text="Extra quantity given free with this line (e.g. a '10+2' scheme: enter 10 in Quantity and 2 here). Free quantity moves stock in/out like the billed quantity, but is never billed or taxed — it plays no part in Basic Amount or any amount calculated from it.", max_digits=15),
++        ),
++    ]
+diff --git a/masters/models.py b/masters/models.py
+index 7d0b773..4913c68 100644
+--- a/masters/models.py
++++ b/masters/models.py
+@@ -650,6 +650,17 @@ class BillSundry(models.Model):
+ class ItemLineMixin(models.Model):
+ 
+     quantity = models.DecimalField(max_digits=15, decimal_places=2)
++    free_quantity = models.DecimalField(
++        max_digits=15,
++        decimal_places=2,
++        default=0,
++        help_text=(
++            "Extra quantity given free with this line (e.g. a '10+2' scheme: "
++            "enter 10 in Quantity and 2 here). Free quantity moves stock "
++            "in/out like the billed quantity, but is never billed or taxed — "
++            "it plays no part in Basic Amount or any amount calculated from it."
++        ),
++    )
+     rate = models.DecimalField(max_digits=15, decimal_places=2)
+     discount = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+     tax = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+@@ -657,6 +668,13 @@ class ItemLineMixin(models.Model):
+     class Meta:
+         abstract = True
+ 
++    @property
++    def total_quantity(self):
++        """Billed + free quantity. This is the figure that should move stock;
++        it deliberately never enters basic_amount/tax/net amount below, which
++        stay keyed off the billed `quantity` only."""
++        return money((self.quantity or ZERO) + (self.free_quantity or ZERO))
++
+     @property
+     def basic_amount(self):
+         if self.quantity is None or self.rate is None:
+diff --git a/masters/reports.py b/masters/reports.py
+index 329d216..9b70176 100644
+--- a/masters/reports.py
++++ b/masters/reports.py
+@@ -393,10 +393,13 @@ def stock_figures(date_from, date_to):
+     purchase_amt = defaultdict(lambda: ZERO)
+     purchase_value_total = ZERO
+ 
++    # Stock QUANTITY moves by billed + free quantity together (a "10+2"
++    # scheme still puts 12 units in the godown); stock VALUE only ever
++    # reflects the billed amount, so amount_after_discount is untouched.
+     for line in PurchaseItem.objects.filter(
+         purchase__date__gte=date_from, purchase__date__lte=date_to, item_id__in=stock_item_ids
+     ).select_related("item"):
+-        purchase_qty[line.item_id] += money(line.quantity)
++        purchase_qty[line.item_id] += line.total_quantity
+         purchase_amt[line.item_id] += line.amount_after_discount
+         purchase_value_total += line.amount_after_discount
+ 
+@@ -405,7 +408,7 @@ def stock_figures(date_from, date_to):
+     for line in SaleItem.objects.filter(
+         sale__date__gte=date_from, sale__date__lte=date_to, item_id__in=stock_item_ids
+     ).select_related("item"):
+-        sale_qty[line.item_id] += money(line.quantity)
++        sale_qty[line.item_id] += line.total_quantity
+ 
+     # Goods that came back from customers (add back to stock) and goods we
+     # sent back to suppliers (remove from stock). Valued at the same WAR as
+@@ -414,13 +417,13 @@ def stock_figures(date_from, date_to):
+     for line in SaleReturnItem.objects.filter(
+         sale_return__date__gte=date_from, sale_return__date__lte=date_to, item_id__in=stock_item_ids
+     ).select_related("item"):
+-        sale_return_qty[line.item_id] += money(line.quantity)
++        sale_return_qty[line.item_id] += line.total_quantity
+ 
+     purchase_return_qty = defaultdict(lambda: ZERO)
+     for line in PurchaseReturnItem.objects.filter(
+         purchase_return__date__gte=date_from, purchase_return__date__lte=date_to, item_id__in=stock_item_ids
+     ).select_related("item"):
+-        purchase_return_qty[line.item_id] += money(line.quantity)
++        purchase_return_qty[line.item_id] += line.total_quantity
+ 
+     stock_rows = []
+     closing_qty_value = ZERO
+diff --git a/masters/static/masters/js/erp_admin.js b/masters/static/masters/js/erp_admin.js
+index 6b98bb4..c23288e 100644
+--- a/masters/static/masters/js/erp_admin.js
++++ b/masters/static/masters/js/erp_admin.js
+@@ -5,8 +5,10 @@
+   // amount/qty/rate fields. Does NOT change what is calculated,
+   // validated or saved — it only sets an HTML attribute that mobile
+   // browsers use to pick a keyboard layout.
++  // NOTE: Quantity is deliberately left out - it now accepts "10+2"
++  // style free-quantity schemes, and a decimal keypad usually hides
++  // the "+" key.
+   var NUMERIC_FIELD_CLASSES = [
+-    "field-quantity",
+     "field-rate",
+     "field-discount",
+     "field-tax",
+diff --git a/masters/static/masters/js/voucher_helper.js b/masters/static/masters/js/voucher_helper.js
+index c7c04ec..11fba77 100644
+--- a/masters/static/masters/js/voucher_helper.js
++++ b/masters/static/masters/js/voucher_helper.js
+@@ -84,20 +84,41 @@
+         });
+     });
+ 
++    // The Quantity box accepts a plain number ('10') or a Busy/Tally style
++    // free-quantity scheme ('10+2' = 10 billed + 2 free). Only the billed
++    // part is ever billed/taxed; the free part only feeds Total Qty.
++    function parseQtyInput(raw) {
++        var str = (raw || '').toString().trim();
++        var match = str.match(/^([0-9]*\.?[0-9]+)\s*(?:\+\s*([0-9]*\.?[0-9]+))?$/);
++        if (!match) {
++            return { billed: parseFloat(str) || 0, free: 0 };
++        }
++        return {
++            billed: parseFloat(match[1]) || 0,
++            free: match[2] ? (parseFloat(match[2]) || 0) : 0
++        };
++    }
++
+     function calculateRowTotals($row) {
+         if ($row.hasClass('empty-form')) return;
+ 
+-        var qty = parseFloat($row.find('.field-quantity input').val()) || 0;
++        var parsedQty = parseQtyInput($row.find('.field-quantity input').val());
++        var qty = parsedQty.billed;
++        var freeQty = parsedQty.free;
+         var rate = parseFloat($row.find('.field-rate input').val()) || 0;
+         var discount = parseFloat($row.find('.field-discount input').val()) || 0;
+         var taxPercent = parseFloat($row.find('.field-tax input').val()) || 0;
+ 
++        // Free quantity (e.g. a "10+2" scheme) moves stock but is never
++        // billed, so it stays out of every amount below - only the
++        // informational Total Qty cell reflects it.
+         var basicAmount = qty * rate;
+         var amountAfterDiscount = basicAmount - discount;
+         var taxAmount = amountAfterDiscount * (taxPercent / 100);
+         var netAmount = amountAfterDiscount + taxAmount;
+ 
+         // Display calculations in read-only cells
++        updateReadonlyText($row.find('.field-total_quantity'), qty + freeQty);
+         updateReadonlyText($row.find('.field-basic_amount'), basicAmount);
+         updateReadonlyText($row.find('.field-amount_after_discount'), amountAfterDiscount);
+         updateReadonlyText($row.find('.field-tax_amount'), taxAmount);
+@@ -115,7 +136,7 @@
+ 
+         $('#items-group tbody tr.form-row:not(.empty-form)').each(function() {
+             var $row = $(this);
+-            var qty = parseFloat($row.find('.field-quantity input').val()) || 0;
++            var qty = parseQtyInput($row.find('.field-quantity input').val()).billed;
+             var rate = parseFloat($row.find('.field-rate input').val()) || 0;
+             var discount = parseFloat($row.find('.field-discount input').val()) || 0;
+             var taxPercent = parseFloat($row.find('.field-tax input').val()) || 0;

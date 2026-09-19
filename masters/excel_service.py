@@ -189,6 +189,23 @@ def _parse_decimal(val, default=Decimal("0")):
         return default
 
 
+def _parse_qty_cell(val):
+    """Parse a Quantity cell that may be a plain number (10) or a Busy/Tally
+    style '10+2' free-quantity scheme entered as text (10 billed + 2 free).
+    Returns (billed_quantity, free_quantity_from_cell) as Decimals. The '+'
+    must be split out here rather than handed to _parse_decimal, which would
+    otherwise strip the '+' and misread '10+2' as 102."""
+    if val is None or val == "":
+        return Decimal("0"), Decimal("0")
+    if isinstance(val, (int, float, Decimal)):
+        return _parse_decimal(val), Decimal("0")
+    text = str(val).strip()
+    if "+" in text:
+        billed_part, _, free_part = text.partition("+")
+        return _parse_decimal(billed_part), _parse_decimal(free_part)
+    return _parse_decimal(text), Decimal("0")
+
+
 def _clean_str(val):
     if val is None:
         return ""
@@ -868,6 +885,7 @@ SALE_VOUCHER_HEADERS = [
     "Item Name *",
     "Unit",
     "Quantity *",
+    "Free Qty",
     "Rate",
     "Discount",
     "Tax Rate %",
@@ -889,6 +907,7 @@ SALE_SAMPLE_ROWS = [
         "Laptop Dell Inspiron 15",
         "PCS",
         2,
+        0,
         55000.00,
         0.00,
         18,
@@ -907,7 +926,8 @@ SALE_SAMPLE_ROWS = [
         "Local Sale",
         "Cotton T-Shirt Blue M",
         "PCS",
-        5,
+        10,
+        2,
         499.00,
         50.00,
         5,
@@ -917,7 +937,7 @@ SALE_SAMPLE_ROWS = [
         0.00,
         "",
         0.00,
-        "",
+        "10+2 free scheme - billed qty 10, 2 free",
     ],
     [
         "2026-09-02",
@@ -927,6 +947,7 @@ SALE_SAMPLE_ROWS = [
         "Basmati Rice Royal 25kg",
         "BAG",
         10,
+        0,
         2200.00,
         0.00,
         0,
@@ -1096,7 +1117,11 @@ def import_sales_from_excel(file_obj, default_sale_type_id=None, update_existing
 
         item_str = _clean_str(get_val(row, "Item Name *", "Item Name", "Item", "item_name", "item"))
         unit_str = _clean_str(get_val(row, "Unit", "unit"))
-        qty_val = _parse_decimal(get_val(row, "Quantity *", "Quantity", "Qty", "quantity"), Decimal("0"))
+        qty_val, inline_free_qty = _parse_qty_cell(get_val(row, "Quantity *", "Quantity", "Qty", "quantity"))
+        explicit_free_qty = get_val(row, "Free Qty", "Free Quantity", "free_qty", "free_quantity")
+        # Either write it inline as "10+2" in the Quantity cell, or use the
+        # separate Free Qty column - whichever the sheet actually has wins.
+        free_qty_val = _parse_decimal(explicit_free_qty) if explicit_free_qty not in (None, "") else inline_free_qty
         rate_val = _parse_decimal(get_val(row, "Rate", "rate", "Price"), None)
         discount_val = _parse_decimal(get_val(row, "Discount", "disc", "discount"), Decimal("0"))
         tax_val = _parse_decimal(get_val(row, "Tax Rate %", "Tax Rate", "Tax", "tax"), None)
@@ -1117,6 +1142,10 @@ def import_sales_from_excel(file_obj, default_sale_type_id=None, update_existing
 
         if qty_val <= 0:
             row_errors.append(f"Row {row_idx} (Inv {inv_no}): Quantity must be greater than 0.")
+            continue
+
+        if free_qty_val < 0:
+            row_errors.append(f"Row {row_idx} (Inv {inv_no}): 'Free Qty' cannot be negative.")
             continue
 
         # Rate defaults to item sale price if not given
@@ -1177,6 +1206,7 @@ def import_sales_from_excel(file_obj, default_sale_type_id=None, update_existing
             "item": item_obj,
             "unit": unit_obj,
             "quantity": qty_val,
+            "free_quantity": free_qty_val,
             "rate": rate_val,
             "discount": discount_val,
             "tax": tax_val,
@@ -1250,6 +1280,7 @@ def import_sales_from_excel(file_obj, default_sale_type_id=None, update_existing
                     item=itm["item"],
                     unit=itm["unit"],
                     quantity=itm["quantity"],
+                    free_quantity=itm["free_quantity"],
                     rate=itm["rate"],
                     discount=itm["discount"],
                     tax=itm["tax"],
@@ -1282,6 +1313,7 @@ PURCHASE_VOUCHER_HEADERS = [
     "Item Name *",
     "Unit",
     "Quantity *",
+    "Free Qty",
     "Rate",
     "Discount",
     "Tax Rate %",
@@ -1304,6 +1336,7 @@ PURCHASE_SAMPLE_ROWS = [
         "Laptop Dell Inspiron 15",
         "PCS",
         5,
+        0,
         48000.00,
         0.00,
         18,
@@ -1324,6 +1357,7 @@ PURCHASE_SAMPLE_ROWS = [
         "Cotton T-Shirt Blue M",
         "PCS",
         20,
+        2,
         320.00,
         0.00,
         5,
@@ -1333,7 +1367,7 @@ PURCHASE_SAMPLE_ROWS = [
         0.00,
         "",
         0.00,
-        "",
+        "10+2 free scheme from supplier",
     ],
     [
         "2026-09-02",
@@ -1344,6 +1378,7 @@ PURCHASE_SAMPLE_ROWS = [
         "Basmati Rice Royal 25kg",
         "BAG",
         25,
+        0,
         1950.00,
         500.00,
         0,
@@ -1520,7 +1555,9 @@ def import_purchases_from_excel(file_obj, default_purchase_type_id=None, update_
 
         item_str = _clean_str(get_val(row, "Item Name *", "Item Name", "Item", "item_name", "item"))
         unit_str = _clean_str(get_val(row, "Unit", "unit"))
-        qty_val = _parse_decimal(get_val(row, "Quantity *", "Quantity", "Qty", "quantity"), Decimal("0"))
+        qty_val, inline_free_qty = _parse_qty_cell(get_val(row, "Quantity *", "Quantity", "Qty", "quantity"))
+        explicit_free_qty = get_val(row, "Free Qty", "Free Quantity", "free_qty", "free_quantity")
+        free_qty_val = _parse_decimal(explicit_free_qty) if explicit_free_qty not in (None, "") else inline_free_qty
         rate_val = _parse_decimal(get_val(row, "Rate", "rate", "Price"), None)
         discount_val = _parse_decimal(get_val(row, "Discount", "disc", "discount"), Decimal("0"))
         tax_val = _parse_decimal(get_val(row, "Tax Rate %", "Tax Rate", "Tax", "tax"), None)
@@ -1540,6 +1577,10 @@ def import_purchases_from_excel(file_obj, default_purchase_type_id=None, update_
 
         if qty_val <= 0:
             row_errors.append(f"Row {row_idx} (Inv {inv_no}): Quantity must be greater than 0.")
+            continue
+
+        if free_qty_val < 0:
+            row_errors.append(f"Row {row_idx} (Inv {inv_no}): 'Free Qty' cannot be negative.")
             continue
 
         if rate_val is None:
@@ -1596,6 +1637,7 @@ def import_purchases_from_excel(file_obj, default_purchase_type_id=None, update_
             "item": item_obj,
             "unit": unit_obj,
             "quantity": qty_val,
+            "free_quantity": free_qty_val,
             "rate": rate_val,
             "discount": discount_val,
             "tax": tax_val,
@@ -1667,6 +1709,7 @@ def import_purchases_from_excel(file_obj, default_purchase_type_id=None, update_
                     item=itm["item"],
                     unit=itm["unit"],
                     quantity=itm["quantity"],
+                    free_quantity=itm["free_quantity"],
                     rate=itm["rate"],
                     discount=itm["discount"],
                     tax=itm["tax"],

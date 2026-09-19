@@ -84,20 +84,41 @@
         });
     });
 
+    // The Quantity box accepts a plain number ('10') or a Busy/Tally style
+    // free-quantity scheme ('10+2' = 10 billed + 2 free). Only the billed
+    // part is ever billed/taxed; the free part only feeds Total Qty.
+    function parseQtyInput(raw) {
+        var str = (raw || '').toString().trim();
+        var match = str.match(/^([0-9]*\.?[0-9]+)\s*(?:\+\s*([0-9]*\.?[0-9]+))?$/);
+        if (!match) {
+            return { billed: parseFloat(str) || 0, free: 0 };
+        }
+        return {
+            billed: parseFloat(match[1]) || 0,
+            free: match[2] ? (parseFloat(match[2]) || 0) : 0
+        };
+    }
+
     function calculateRowTotals($row) {
         if ($row.hasClass('empty-form')) return;
 
-        var qty = parseFloat($row.find('.field-quantity input').val()) || 0;
+        var parsedQty = parseQtyInput($row.find('.field-quantity input').val());
+        var qty = parsedQty.billed;
+        var freeQty = parsedQty.free;
         var rate = parseFloat($row.find('.field-rate input').val()) || 0;
         var discount = parseFloat($row.find('.field-discount input').val()) || 0;
         var taxPercent = parseFloat($row.find('.field-tax input').val()) || 0;
 
+        // Free quantity (e.g. a "10+2" scheme) moves stock but is never
+        // billed, so it stays out of every amount below - only the
+        // informational Total Qty cell reflects it.
         var basicAmount = qty * rate;
         var amountAfterDiscount = basicAmount - discount;
         var taxAmount = amountAfterDiscount * (taxPercent / 100);
         var netAmount = amountAfterDiscount + taxAmount;
 
         // Display calculations in read-only cells
+        updateReadonlyText($row.find('.field-total_quantity'), qty + freeQty);
         updateReadonlyText($row.find('.field-basic_amount'), basicAmount);
         updateReadonlyText($row.find('.field-amount_after_discount'), amountAfterDiscount);
         updateReadonlyText($row.find('.field-tax_amount'), taxAmount);
@@ -115,7 +136,7 @@
 
         $('#items-group tbody tr.form-row:not(.empty-form)').each(function() {
             var $row = $(this);
-            var qty = parseFloat($row.find('.field-quantity input').val()) || 0;
+            var qty = parseQtyInput($row.find('.field-quantity input').val()).billed;
             var rate = parseFloat($row.find('.field-rate input').val()) || 0;
             var discount = parseFloat($row.find('.field-discount input').val()) || 0;
             var taxPercent = parseFloat($row.find('.field-tax input').val()) || 0;

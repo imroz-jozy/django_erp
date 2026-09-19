@@ -650,12 +650,30 @@ class BillSundry(models.Model):
 class ItemLineMixin(models.Model):
 
     quantity = models.DecimalField(max_digits=15, decimal_places=2)
+    free_quantity = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=0,
+        help_text=(
+            "Extra quantity given free with this line (e.g. a '10+2' scheme: "
+            "enter 10 in Quantity and 2 here). Free quantity moves stock "
+            "in/out like the billed quantity, but is never billed or taxed — "
+            "it plays no part in Basic Amount or any amount calculated from it."
+        ),
+    )
     rate = models.DecimalField(max_digits=15, decimal_places=2)
     discount = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     tax = models.DecimalField(max_digits=5, decimal_places=2, default=0)
 
     class Meta:
         abstract = True
+
+    @property
+    def total_quantity(self):
+        """Billed + free quantity. This is the figure that should move stock;
+        it deliberately never enters basic_amount/tax/net amount below, which
+        stay keyed off the billed `quantity` only."""
+        return money((self.quantity or ZERO) + (self.free_quantity or ZERO))
 
     @property
     def basic_amount(self):

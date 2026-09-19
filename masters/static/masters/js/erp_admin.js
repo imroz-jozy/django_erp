@@ -5,8 +5,10 @@
   // amount/qty/rate fields. Does NOT change what is calculated,
   // validated or saved — it only sets an HTML attribute that mobile
   // browsers use to pick a keyboard layout.
+  // NOTE: Quantity is deliberately left out - it now accepts "10+2"
+  // style free-quantity schemes, and a decimal keypad usually hides
+  // the "+" key.
   var NUMERIC_FIELD_CLASSES = [
-    "field-quantity",
     "field-rate",
     "field-discount",
     "field-tax",

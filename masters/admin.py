@@ -591,7 +591,8 @@ SALE_COLUMN_GUIDE = [
     {"name": "Sale Type", "type": "Text", "required": False, "description": "Sale Type name (e.g. 'Local Sale'). If left blank, uses selected default on upload."},
     {"name": "Item Name *", "type": "Text", "required": True, "description": "Stock item name. Must already exist in database."},
     {"name": "Unit", "type": "Text", "required": False, "description": "Unit name (e.g. PCS). If blank, uses item's main unit."},
-    {"name": "Quantity *", "type": "Number", "required": True, "description": "Billed quantity (must be > 0)."},
+    {"name": "Quantity *", "type": "Number or Text", "required": True, "description": "Billed quantity (must be > 0). Also accepts a '10+2' scheme (10 billed + 2 free) directly in this cell."},
+    {"name": "Free Qty", "type": "Number", "required": False, "description": "Free quantity for this line, if not already written inline as '10+2' in Quantity (default 0)."},
     {"name": "Rate", "type": "Number", "required": False, "description": "Item rate. If blank, defaults to item master Sale Price. Enter 0 to import a zero rate."},
     {"name": "Discount", "type": "Number", "required": False, "description": "Discount amount for this line (default 0)."},
     {"name": "Tax Rate %", "type": "Number", "required": False, "description": "Tax percentage. If blank, defaults to item master tax rate."},
@@ -611,7 +612,8 @@ PURCHASE_COLUMN_GUIDE = [
     {"name": "Purchase Type", "type": "Text", "required": False, "description": "Purchase Type name (e.g. 'Local Purchase'). If left blank, uses selected default on upload."},
     {"name": "Item Name *", "type": "Text", "required": True, "description": "Stock item name. Must already exist in database."},
     {"name": "Unit", "type": "Text", "required": False, "description": "Unit name (e.g. PCS). If blank, uses item's main unit."},
-    {"name": "Quantity *", "type": "Number", "required": True, "description": "Billed quantity (must be > 0)."},
+    {"name": "Quantity *", "type": "Number or Text", "required": True, "description": "Billed quantity (must be > 0). Also accepts a '10+2' scheme (10 billed + 2 free) directly in this cell."},
+    {"name": "Free Qty", "type": "Number", "required": False, "description": "Free quantity for this line, if not already written inline as '10+2' in Quantity (default 0)."},
     {"name": "Rate", "type": "Number", "required": False, "description": "Item rate. If blank, defaults to item master Purchase Price. Enter 0 to import a zero rate."},
     {"name": "Discount", "type": "Number", "required": False, "description": "Discount amount for this line (default 0)."},
     {"name": "Tax Rate %", "type": "Number", "required": False, "description": "Tax percentage. If blank, defaults to item master tax rate."},
@@ -1189,15 +1191,119 @@ if not getattr(admin.site, "_erp_urls_patched", False):
 # INLINES
 # =========================================================
 
+import re as _re
+from decimal import Decimal as _Decimal, InvalidOperation as _InvalidOperation
+
+_QTY_INPUT_RE = _re.compile(r"^\s*([0-9]*\.?[0-9]+)\s*(?:\+\s*([0-9]*\.?[0-9]+))?\s*$")
+
+
+def _parse_qty_input(raw):
+    """Parse the Quantity box's text: a plain number ('10') or a Busy/Tally
+    style free-quantity scheme ('10+2' = 10 billed + 2 free). Raises
+    forms.ValidationError on anything else, so it surfaces as a normal
+    field error in the admin form."""
+    text = ("" if raw is None else str(raw)).strip()
+    if not text:
+        raise forms.ValidationError("Quantity is required.")
+    match = _QTY_INPUT_RE.match(text)
+    if not match:
+        raise forms.ValidationError(
+            "Enter a quantity, or 'billed+free' for a scheme, e.g. '10+2' for "
+            "10 billed and 2 free."
+        )
+    try:
+        billed = _Decimal(match.group(1))
+        free = _Decimal(match.group(2)) if match.group(2) else _Decimal("0")
+    except _InvalidOperation:
+        raise forms.ValidationError("Enter valid numbers, e.g. '10+2'.")
+    if billed <= 0:
+        raise forms.ValidationError("Billed quantity must be greater than 0.")
+    if free < 0:
+        raise forms.ValidationError("Free quantity cannot be negative.")
+    return billed, free
+
+
+def _format_qty_display(quantity, free_quantity):
+    """Render existing (quantity, free_quantity) back as '10+2' (or plain
+    '10' when there's no free quantity), so re-opening a saved line shows
+    the same scheme notation it was entered in."""
+    def _trim(d):
+        d = (d or _Decimal("0")).normalize()
+        if d == d.to_integral():
+            return str(d.quantize(_Decimal(1)))
+        return format(d, "f")
+
+    q = _trim(quantity)
+    f = free_quantity or _Decimal("0")
+    return f"{q}+{_trim(f)}" if f else q
+
+
+class QuantityWithFreeSchemeForm(forms.ModelForm):
+    """Shared by the Sale/Purchase/Sale-Return/Purchase-Return item inline
+    forms: replaces the plain Quantity number box with a single text box
+    that accepts '10+2' (10 billed + 2 free), splitting it into the
+    quantity/free_quantity model fields on save."""
+
+    quantity = forms.CharField(
+        label="Quantity",
+        required=True,
+        widget=forms.TextInput(attrs={"style": "width: 6em;", "placeholder": "10 or 10+2"}),
+        help_text="Plain qty, or 'billed+free' for a scheme, e.g. '10+2'.",
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance and self.instance.pk:
+            self.initial["quantity"] = _format_qty_display(
+                self.instance.quantity, self.instance.free_quantity
+            )
+
+    def clean_quantity(self):
+        billed, free = _parse_qty_input(self.cleaned_data.get("quantity"))
+        # free_quantity isn't one of this form's fields (see each inline's
+        # `fields`), so construct_instance() won't touch it - setting it
+        # directly here is what actually persists it.
+        self.instance.free_quantity = free
+        return billed
+
+
+class SaleItemForm(QuantityWithFreeSchemeForm):
+    class Meta:
+        model = SaleItem
+        # Deliberately excludes free_quantity: clean_quantity() above sets
+        # it on the instance directly from the "10+2" text in Quantity.
+        fields = ("item", "unit", "quantity", "rate", "discount", "tax")
+
+
+class PurchaseItemForm(QuantityWithFreeSchemeForm):
+    class Meta:
+        model = PurchaseItem
+        fields = ("item", "unit", "quantity", "rate", "discount", "tax")
+
+
+class SaleReturnItemForm(QuantityWithFreeSchemeForm):
+    class Meta:
+        model = SaleReturnItem
+        fields = ("item", "unit", "quantity", "rate", "discount", "tax")
+
+
+class PurchaseReturnItemForm(QuantityWithFreeSchemeForm):
+    class Meta:
+        model = PurchaseReturnItem
+        fields = ("item", "unit", "quantity", "rate", "discount", "tax")
+
+
 class SaleItemInline(admin.TabularInline):
     model = SaleItem
+    form = SaleItemForm
     extra = 1
     autocomplete_fields = ("item", "unit")
-    readonly_fields = ("basic_amount", "amount_after_discount", "tax_amount", "net_amount")
+    readonly_fields = ("total_quantity", "basic_amount", "amount_after_discount", "tax_amount", "net_amount")
     fields = (
         "item",
         "unit",
         "quantity",
+        "total_quantity",
         "rate",
         "discount",
         "tax",
@@ -1216,13 +1322,15 @@ class SaleBillSundryInline(admin.TabularInline):
 
 class PurchaseItemInline(admin.TabularInline):
     model = PurchaseItem
+    form = PurchaseItemForm
     extra = 1
     autocomplete_fields = ("item", "unit")
-    readonly_fields = ("basic_amount", "amount_after_discount", "tax_amount", "net_amount")
+    readonly_fields = ("total_quantity", "basic_amount", "amount_after_discount", "tax_amount", "net_amount")
     fields = (
         "item",
         "unit",
         "quantity",
+        "total_quantity",
         "rate",
         "discount",
         "tax",
@@ -1241,13 +1349,15 @@ class PurchaseBillSundryInline(admin.TabularInline):
 
 class SaleReturnItemInline(admin.TabularInline):
     model = SaleReturnItem
+    form = SaleReturnItemForm
     extra = 1
     autocomplete_fields = ("item", "unit")
-    readonly_fields = ("basic_amount", "amount_after_discount", "tax_amount", "net_amount")
+    readonly_fields = ("total_quantity", "basic_amount", "amount_after_discount", "tax_amount", "net_amount")
     fields = (
         "item",
         "unit",
         "quantity",
+        "total_quantity",
         "rate",
         "discount",
         "tax",
@@ -1266,13 +1376,15 @@ class SaleReturnBillSundryInline(admin.TabularInline):
 
 class PurchaseReturnItemInline(admin.TabularInline):
     model = PurchaseReturnItem
+    form = PurchaseReturnItemForm
     extra = 1
     autocomplete_fields = ("item", "unit")
-    readonly_fields = ("basic_amount", "amount_after_discount", "tax_amount", "net_amount")
+    readonly_fields = ("total_quantity", "basic_amount", "amount_after_discount", "tax_amount", "net_amount")
     fields = (
         "item",
         "unit",
         "quantity",
+        "total_quantity",
         "rate",
         "discount",
         "tax",

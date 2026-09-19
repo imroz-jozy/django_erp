@@ -393,10 +393,13 @@ def stock_figures(date_from, date_to):
     purchase_amt = defaultdict(lambda: ZERO)
     purchase_value_total = ZERO
 
+    # Stock QUANTITY moves by billed + free quantity together (a "10+2"
+    # scheme still puts 12 units in the godown); stock VALUE only ever
+    # reflects the billed amount, so amount_after_discount is untouched.
     for line in PurchaseItem.objects.filter(
         purchase__date__gte=date_from, purchase__date__lte=date_to, item_id__in=stock_item_ids
     ).select_related("item"):
-        purchase_qty[line.item_id] += money(line.quantity)
+        purchase_qty[line.item_id] += line.total_quantity
         purchase_amt[line.item_id] += line.amount_after_discount
         purchase_value_total += line.amount_after_discount
 
@@ -405,7 +408,7 @@ def stock_figures(date_from, date_to):
     for line in SaleItem.objects.filter(
         sale__date__gte=date_from, sale__date__lte=date_to, item_id__in=stock_item_ids
     ).select_related("item"):
-        sale_qty[line.item_id] += money(line.quantity)
+        sale_qty[line.item_id] += line.total_quantity
 
     # Goods that came back from customers (add back to stock) and goods we
     # sent back to suppliers (remove from stock). Valued at the same WAR as
@@ -414,13 +417,13 @@ def stock_figures(date_from, date_to):
     for line in SaleReturnItem.objects.filter(
         sale_return__date__gte=date_from, sale_return__date__lte=date_to, item_id__in=stock_item_ids
     ).select_related("item"):
-        sale_return_qty[line.item_id] += money(line.quantity)
+        sale_return_qty[line.item_id] += line.total_quantity
 
     purchase_return_qty = defaultdict(lambda: ZERO)
     for line in PurchaseReturnItem.objects.filter(
         purchase_return__date__gte=date_from, purchase_return__date__lte=date_to, item_id__in=stock_item_ids
     ).select_related("item"):
-        purchase_return_qty[line.item_id] += money(line.quantity)
+        purchase_return_qty[line.item_id] += line.total_quantity
 
     stock_rows = []
     closing_qty_value = ZERO
