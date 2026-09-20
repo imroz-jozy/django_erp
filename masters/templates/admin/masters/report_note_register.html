@@ -1,4 +1,5 @@
 {% extends "admin/masters/report_base.html" %}
+{% load erp_extras %}
 
 {% block report_body %}
 <table class="erp-report">
@@ -15,7 +16,11 @@
     {% for note in rows %}
     <tr>
       <td>{{ note.date }}</td>
-      <td>{{ note.voucher_no }}</td>
+      <td>
+        {% with url=note|admin_url %}
+        {% if url %}<a href="{{ url }}">{{ note.voucher_no }}</a>{% else %}{{ note.voucher_no }}{% endif %}
+        {% endwith %}
+      </td>
       <td>{{ note.account }}</td>
       <td>{{ note.lines_summary }}</td>
       <td class="num">{{ note.total_amount }}</td>

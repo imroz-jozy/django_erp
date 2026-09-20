@@ -1,4 +1,5 @@
 {% extends "admin/masters/report_base.html" %}
+{% load erp_extras %}
 
 {% block report_body %}
 <table class="erp-report">
@@ -16,7 +17,11 @@
     {% for row in rows %}
     <tr>
       <td>{{ row.date }}</td>
-      <td>{{ row.voucher_no }}</td>
+      <td>
+        {% with url=row|admin_url %}
+        {% if url %}<a href="{{ url }}">{{ row.voucher_no }}</a>{% else %}{{ row.voucher_no }}{% endif %}
+        {% endwith %}
+      </td>
       <td>{{ row.parties_summary }}</td>
       <td>{{ row.through }}</td>
       <td>{{ row.narration }}</td>

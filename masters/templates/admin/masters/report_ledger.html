@@ -38,7 +38,9 @@
     <tr>
       <td>{{ row.date }}</td>
       <td>{{ row.vtype }}</td>
-      <td>{{ row.voucher_no }}</td>
+      <td>
+        {% if row.voucher_url %}<a href="{{ row.voucher_url }}">{{ row.voucher_no }}</a>{% else %}{{ row.voucher_no }}{% endif %}
+      </td>
       <td>{{ row.narration }}</td>
       <td class="num">{% if row.debit %}{{ row.debit }}{% endif %}</td>
       <td class="num">{% if row.credit %}{{ row.credit }}{% endif %}</td>

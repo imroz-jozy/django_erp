@@ -3,6 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from django.db.models import Prefetch, Sum
+from django.urls import NoReverseMatch, reverse
 
 from .models import (
     Account,
@@ -736,6 +737,90 @@ def gst_outward_summary(date_from, date_to):
     }
 
 
+def group_drill(date_from, date_to, group_id=None, natures=None):
+    """Tally-style clickable group breakdown: shown at `group_id` (or the
+    top level when None), each row is either a sub-group (still rolled up -
+    click it to drill one level deeper) or a ledger account directly in
+    this group (click it to open that account's ledger). This is what
+    lets Balance Sheet / P&L / Trial Balance show just a group's total
+    without dumping every ledger under it."""
+    rows = build_ledgers(date_from, date_to)
+    totals = group_tree_balances(rows)
+
+    def totals_for(group):
+        t = totals.get(group.id)
+        if not t:
+            return ZERO, ZERO, ZERO, []
+        return t["debit"], t["credit"], t["balance"], t.get("accounts", [])
+
+    if group_id:
+        current = AccountGroup.objects.select_related("under_group").get(pk=group_id)
+        breadcrumbs = []
+        node = current
+        while node:
+            breadcrumbs.insert(0, node)
+            node = node.under_group
+        child_qs = current.sub_groups.all().order_by("name")
+        _, _, _, ledger_rows = totals_for(current)
+    else:
+        current = None
+        breadcrumbs = []
+        child_qs = AccountGroup.objects.filter(under_group__isnull=True).order_by("name")
+        if natures:
+            child_qs = child_qs.filter(nature__in=natures)
+        ledger_rows = []
+
+    child_groups = []
+    for g in child_qs:
+        debit, credit, balance, _ = totals_for(g)
+        if debit == 0 and credit == 0:
+            continue
+        child_groups.append(
+            {
+                "group": g,
+                "debit": debit,
+                "credit": credit,
+                "balance": abs(balance),
+                "dr_cr": "Dr" if balance >= 0 else "Cr",
+            }
+        )
+
+    ledger_rows = [r for r in ledger_rows if r["debit"] or r["credit"]]
+    ledger_rows.sort(key=lambda r: r["account"].account_name)
+
+    total_debit = money(
+        sum((c["debit"] for c in child_groups), ZERO) + sum((r["debit"] for r in ledger_rows), ZERO)
+    )
+    total_credit = money(
+        sum((c["credit"] for c in child_groups), ZERO) + sum((r["credit"] for r in ledger_rows), ZERO)
+    )
+
+    return {
+        "current": current,
+        "breadcrumbs": breadcrumbs,
+        "child_groups": child_groups,
+        "ledger_rows": ledger_rows,
+        "total_debit": total_debit,
+        "total_credit": total_credit,
+    }
+
+
+def _group_rows_by_leaf_group(rows, sign=1):
+    """Collapse ledger-level rows into totals per the AccountGroup each
+    ledger sits directly under (not per-ledger) - e.g. every customer
+    ledger under 'Sale' becomes one 'Sale' line. Used so P&L shows
+    subgroup totals only, each clickable via group_drill()."""
+    buckets = {}
+    for row in rows:
+        g = row["group"]
+        bucket = buckets.setdefault(g.id, {"group": g, "amount": ZERO})
+        bucket["amount"] += money(sign * row["balance"])
+    return sorted(
+        (b for b in buckets.values() if b["amount"] != 0),
+        key=lambda b: b["group"].name,
+    )
+
+
 def trial_balance(date_from, date_to):
     rows = build_ledgers(date_from, date_to)
     total_dr = money(sum((r["debit"] for r in rows), ZERO))
@@ -787,6 +872,14 @@ def profit_loss(date_from, date_to):
     indirect_income_total = credit_balance(indirect_income)
     indirect_exp_total = debit_balance(indirect_exp)
 
+    # Subgroup-collapsed versions for display: one clickable line per
+    # AccountGroup the ledgers actually sit under, not one line per ledger.
+    sales_groups = _group_rows_by_leaf_group(sales, sign=-1)
+    indirect_income_groups = _group_rows_by_leaf_group(indirect_income, sign=-1)
+    purchase_groups = _group_rows_by_leaf_group(purchases, sign=1)
+    direct_exp_groups = _group_rows_by_leaf_group(direct_exp, sign=1)
+    indirect_exp_groups = _group_rows_by_leaf_group(indirect_exp, sign=1)
+
     opening = stock["opening_stock"]
     closing = stock["closing_stock"]
 
@@ -811,6 +904,11 @@ def profit_loss(date_from, date_to):
         "direct_exp": direct_exp,
         "indirect_income": indirect_income,
         "indirect_exp": indirect_exp,
+        "sales_groups": sales_groups,
+        "purchase_groups": purchase_groups,
+        "direct_exp_groups": direct_exp_groups,
+        "indirect_income_groups": indirect_income_groups,
+        "indirect_exp_groups": indirect_exp_groups,
         "opening_stock": opening,
         "closing_stock": closing,
         "sales_total": sales_total,
@@ -834,6 +932,7 @@ def balance_sheet(date_from, date_to):
 
     def by_primary(*natures):
         buckets = defaultdict(list)
+        primary_objs = {}
         for row in rows:
             if row["nature"] not in natures:
                 continue
@@ -845,54 +944,48 @@ def balance_sheet(date_from, date_to):
             while primary.under_group_id:
                 primary = primary.under_group
             buckets[primary.name].append(row)
-        return buckets
+            primary_objs[primary.name] = primary
+        return buckets, primary_objs
 
-    assets = by_primary(AccountGroup.Nature.ASSET)
-    liabilities = by_primary(
+    assets, asset_group_objs = by_primary(AccountGroup.Nature.ASSET)
+    liabilities, liab_group_objs = by_primary(
         AccountGroup.Nature.LIABILITY, AccountGroup.Nature.EQUITY
     )
 
-    def side_total(buckets, sign="asset"):
+    def side_total(buckets, primary_objs, sign="asset"):
+        # Shows just the primary group's total (Current Assets, Fixed
+        # Assets, ...) - not a line per ledger. Drilling into the group
+        # (via group_drill, linked from the template) is how you see the
+        # ledgers or sub-groups underneath it.
         total = ZERO
         groups = []
         for name, items in sorted(buckets.items()):
             group_total = ZERO
-            lines = []
             for row in items:
-                if sign == "asset":
-                    amt = row["balance"]
-                else:
-                    amt = money(-row["balance"])
-                if amt == 0:
-                    continue
+                amt = row["balance"] if sign == "asset" else money(-row["balance"])
                 group_total += amt
-                lines.append({"name": row["account"].account_name, "amount": amt})
-            if lines:
-                groups.append({"name": name, "lines": lines, "total": money(group_total)})
-                total += group_total
+            if group_total == 0:
+                continue
+            groups.append({"name": name, "group": primary_objs.get(name), "total": money(group_total)})
+            total += group_total
         return groups, money(total)
 
-    asset_groups, asset_total = side_total(assets, "asset")
+    asset_groups, asset_total = side_total(assets, asset_group_objs, "asset")
     asset_groups.append(
         {
             "name": "Stock-in-hand",
-            "lines": [{"name": "Closing Stock", "amount": stock["closing_stock"]}],
+            "group": None,
             "total": stock["closing_stock"],
         }
     )
     asset_total = money(asset_total + stock["closing_stock"])
 
-    liab_groups, liab_total = side_total(liabilities, "liability")
+    liab_groups, liab_total = side_total(liabilities, liab_group_objs, "liability")
     pl_amount = money(pl["net_profit"] - pl["net_loss"])
     liab_groups.append(
         {
-            "name": "Profit & Loss",
-            "lines": [
-                {
-                    "name": "Current Period Profit" if pl_amount >= 0 else "Current Period Loss",
-                    "amount": pl_amount,
-                }
-            ],
+            "name": "Current Period Profit" if pl_amount >= 0 else "Current Period Loss",
+            "group": None,
             "total": pl_amount,
         }
     )
@@ -1023,7 +1116,21 @@ def journal_register(date_from, date_to):
     return rows, money(total)
 
 
-def _append_entry(entries, date, vtype, vno, narration, debit, credit):
+def _voucher_admin_url(voucher):
+    """Best-effort admin change-page URL for any voucher model instance, so
+    ledger/register rows can link straight back to the actual voucher."""
+    if voucher is None or not getattr(voucher, "pk", None):
+        return None
+    try:
+        return reverse(
+            f"admin:{voucher._meta.app_label}_{voucher._meta.model_name}_change",
+            args=[voucher.pk],
+        )
+    except NoReverseMatch:
+        return None
+
+
+def _append_entry(entries, date, vtype, vno, narration, debit, credit, voucher=None):
     debit = money(debit)
     credit = money(credit)
     if debit == 0 and credit == 0:
@@ -1036,6 +1143,7 @@ def _append_entry(entries, date, vtype, vno, narration, debit, credit):
             "narration": narration or "",
             "debit": debit,
             "credit": credit,
+            "voucher_url": _voucher_admin_url(voucher),
         }
     )
 
@@ -1063,31 +1171,27 @@ def _voucher_entries_for_account(account):
         totals = sale.totals()
         if sale.account_id == acc_id:
             _append_entry(
-                entries, sale.date, "Sale", sale.invoice_no, sale.narration, totals["net_amount"], 0
-            )
+                entries, sale.date, "Sale", sale.invoice_no, sale.narration, totals["net_amount"], 0, voucher=sale)
         sales_acc = sale.sale_type.sales_account if sale.sale_type_id else None
         for line in sale.items.all():
             line_acc = line.item.sale_account if (line.item_id and line.item.sale_account_id) else sales_acc
             if line_acc and line_acc.id == acc_id:
                 _append_entry(
-                    entries, sale.date, "Sale", sale.invoice_no, sale.narration, 0, line.amount_after_discount
-                )
+                    entries, sale.date, "Sale", sale.invoice_no, sale.narration, 0, line.amount_after_discount, voucher=sale)
         if sale.sale_type_id and totals["tax_amount"]:
             for tax_acc, tax_amt in sale.sale_type.tax_postings(totals["tax_amount"]):
                 if tax_acc and tax_acc.id == acc_id:
                     _append_entry(
-                        entries, sale.date, "Sale", sale.invoice_no, sale.narration, 0, tax_amt
-                    )
+                        entries, sale.date, "Sale", sale.invoice_no, sale.narration, 0, tax_amt, voucher=sale)
         for line, signed in zip(sale.bill_sundries.all(), totals["sundry_signed_amounts"]):
             acc = line.bill_sundry.posting_account_sale or sales_acc
             if not acc or acc.id != acc_id:
                 continue
             if signed >= 0:
-                _append_entry(entries, sale.date, "Sale", sale.invoice_no, sale.narration, 0, signed)
+                _append_entry(entries, sale.date, "Sale", sale.invoice_no, sale.narration, 0, signed, voucher=sale)
             else:
                 _append_entry(
-                    entries, sale.date, "Sale", sale.invoice_no, sale.narration, -signed, 0
-                )
+                    entries, sale.date, "Sale", sale.invoice_no, sale.narration, -signed, 0, voucher=sale)
 
     purchases = Purchase.objects.select_related(
         "account",
@@ -1119,8 +1223,7 @@ def _voucher_entries_for_account(account):
             party_amount = money(totals["net_amount"] - totals["tax_amount"])
             if purchase.account_id == acc_id:
                 _append_entry(
-                    entries, purchase.date, "Purchase", purchase.invoice_no, purchase.narration, 0, party_amount
-                )
+                    entries, purchase.date, "Purchase", purchase.invoice_no, purchase.narration, 0, party_amount, voucher=purchase)
             if rcm_acc.id == acc_id:
                 _append_entry(
                     entries,
@@ -1129,8 +1232,7 @@ def _voucher_entries_for_account(account):
                     purchase.invoice_no,
                     purchase.narration,
                     0,
-                    totals["tax_amount"],
-                )
+                    totals["tax_amount"], voucher=purchase)
         elif purchase.account_id == acc_id:
             _append_entry(
                 entries,
@@ -1139,8 +1241,7 @@ def _voucher_entries_for_account(account):
                 purchase.invoice_no,
                 purchase.narration,
                 0,
-                totals["net_amount"],
-            )
+                totals["net_amount"], voucher=purchase)
         for line in purchase.items.all():
             line_acc = (
                 line.item.purchase_account if (line.item_id and line.item.purchase_account_id) else purchase_acc
@@ -1153,8 +1254,7 @@ def _voucher_entries_for_account(account):
                     purchase.invoice_no,
                     purchase.narration,
                     line.amount_after_discount,
-                    0,
-                )
+                    0, voucher=purchase)
         if purchase.purchase_type_id and totals["tax_amount"]:
             for tax_acc, tax_amt in purchase.purchase_type.tax_postings(totals["tax_amount"]):
                 if tax_acc and tax_acc.id == acc_id:
@@ -1165,8 +1265,7 @@ def _voucher_entries_for_account(account):
                         purchase.invoice_no,
                         purchase.narration,
                         tax_amt,
-                        0,
-                    )
+                        0, voucher=purchase)
         for line, signed in zip(purchase.bill_sundries.all(), totals["sundry_signed_amounts"]):
             acc = line.bill_sundry.posting_account_purchase or purchase_acc
             if not acc or acc.id != acc_id:
@@ -1179,8 +1278,7 @@ def _voucher_entries_for_account(account):
                     purchase.invoice_no,
                     purchase.narration,
                     signed,
-                    0,
-                )
+                    0, voucher=purchase)
             else:
                 _append_entry(
                     entries,
@@ -1189,8 +1287,7 @@ def _voucher_entries_for_account(account):
                     purchase.invoice_no,
                     purchase.narration,
                     0,
-                    -signed,
-                )
+                    -signed, voucher=purchase)
 
     sale_returns = SaleReturn.objects.select_related(
         "account",
@@ -1212,27 +1309,25 @@ def _voucher_entries_for_account(account):
         totals = sr.totals()
         if sr.account_id == acc_id:
             _append_entry(
-                entries, sr.date, "Sale Return", sr.voucher_no, sr.narration, 0, totals["net_amount"]
-            )
+                entries, sr.date, "Sale Return", sr.voucher_no, sr.narration, 0, totals["net_amount"], voucher=sr)
         return_acc = sr.sale_type.effective_sales_return_account if sr.sale_type_id else None
         for line in sr.items.all():
             line_acc = line.item.sale_account if (line.item_id and line.item.sale_account_id) else return_acc
             if line_acc and line_acc.id == acc_id:
                 _append_entry(
-                    entries, sr.date, "Sale Return", sr.voucher_no, sr.narration, line.amount_after_discount, 0
-                )
+                    entries, sr.date, "Sale Return", sr.voucher_no, sr.narration, line.amount_after_discount, 0, voucher=sr)
         if sr.sale_type_id and totals["tax_amount"]:
             for tax_acc, tax_amt in sr.sale_type.tax_postings(totals["tax_amount"]):
                 if tax_acc and tax_acc.id == acc_id:
-                    _append_entry(entries, sr.date, "Sale Return", sr.voucher_no, sr.narration, tax_amt, 0)
+                    _append_entry(entries, sr.date, "Sale Return", sr.voucher_no, sr.narration, tax_amt, 0, voucher=sr)
         for line, signed in zip(sr.bill_sundries.all(), totals["sundry_signed_amounts"]):
             acc = line.bill_sundry.posting_account_sale or return_acc
             if not acc or acc.id != acc_id:
                 continue
             if signed >= 0:
-                _append_entry(entries, sr.date, "Sale Return", sr.voucher_no, sr.narration, signed, 0)
+                _append_entry(entries, sr.date, "Sale Return", sr.voucher_no, sr.narration, signed, 0, voucher=sr)
             else:
-                _append_entry(entries, sr.date, "Sale Return", sr.voucher_no, sr.narration, 0, -signed)
+                _append_entry(entries, sr.date, "Sale Return", sr.voucher_no, sr.narration, 0, -signed, voucher=sr)
 
     purchase_returns = PurchaseReturn.objects.select_related(
         "account",
@@ -1254,8 +1349,7 @@ def _voucher_entries_for_account(account):
         totals = pr.totals()
         if pr.account_id == acc_id:
             _append_entry(
-                entries, pr.date, "Purchase Return", pr.voucher_no, pr.narration, totals["net_amount"], 0
-            )
+                entries, pr.date, "Purchase Return", pr.voucher_no, pr.narration, totals["net_amount"], 0, voucher=pr)
         return_acc = pr.purchase_type.effective_purchase_return_account if pr.purchase_type_id else None
         for line in pr.items.all():
             line_acc = (
@@ -1263,48 +1357,47 @@ def _voucher_entries_for_account(account):
             )
             if line_acc and line_acc.id == acc_id:
                 _append_entry(
-                    entries, pr.date, "Purchase Return", pr.voucher_no, pr.narration, 0, line.amount_after_discount
-                )
+                    entries, pr.date, "Purchase Return", pr.voucher_no, pr.narration, 0, line.amount_after_discount, voucher=pr)
         if pr.purchase_type_id and totals["tax_amount"]:
             for tax_acc, tax_amt in pr.purchase_type.tax_postings(totals["tax_amount"]):
                 if tax_acc and tax_acc.id == acc_id:
-                    _append_entry(entries, pr.date, "Purchase Return", pr.voucher_no, pr.narration, 0, tax_amt)
+                    _append_entry(entries, pr.date, "Purchase Return", pr.voucher_no, pr.narration, 0, tax_amt, voucher=pr)
         for line, signed in zip(pr.bill_sundries.all(), totals["sundry_signed_amounts"]):
             acc = line.bill_sundry.posting_account_purchase or return_acc
             if not acc or acc.id != acc_id:
                 continue
             if signed >= 0:
-                _append_entry(entries, pr.date, "Purchase Return", pr.voucher_no, pr.narration, 0, signed)
+                _append_entry(entries, pr.date, "Purchase Return", pr.voucher_no, pr.narration, 0, signed, voucher=pr)
             else:
-                _append_entry(entries, pr.date, "Purchase Return", pr.voucher_no, pr.narration, -signed, 0)
+                _append_entry(entries, pr.date, "Purchase Return", pr.voucher_no, pr.narration, -signed, 0, voucher=pr)
 
     for cn in CreditNote.objects.select_related("account").prefetch_related("lines__account"):
         if cn.account_id == acc_id:
-            _append_entry(entries, cn.date, "Credit Note", cn.voucher_no, cn.narration, 0, cn.total_amount)
+            _append_entry(entries, cn.date, "Credit Note", cn.voucher_no, cn.narration, 0, cn.total_amount, voucher=cn)
         for line in cn.lines.all():
             if line.account_id == acc_id:
-                _append_entry(entries, cn.date, "Credit Note", cn.voucher_no, cn.narration, line.amount, 0)
+                _append_entry(entries, cn.date, "Credit Note", cn.voucher_no, cn.narration, line.amount, 0, voucher=cn)
 
     for dn in DebitNote.objects.select_related("account").prefetch_related("lines__account"):
         if dn.account_id == acc_id:
-            _append_entry(entries, dn.date, "Debit Note", dn.voucher_no, dn.narration, dn.total_amount, 0)
+            _append_entry(entries, dn.date, "Debit Note", dn.voucher_no, dn.narration, dn.total_amount, 0, voucher=dn)
         for line in dn.lines.all():
             if line.account_id == acc_id:
-                _append_entry(entries, dn.date, "Debit Note", dn.voucher_no, dn.narration, 0, line.amount)
+                _append_entry(entries, dn.date, "Debit Note", dn.voucher_no, dn.narration, 0, line.amount, voucher=dn)
 
     for pmt in Payment.objects.select_related("through").prefetch_related("lines__account"):
         for line in pmt.lines.all():
             if line.account_id == acc_id:
-                _append_entry(entries, pmt.date, "Payment", pmt.voucher_no, pmt.narration, line.amount, 0)
+                _append_entry(entries, pmt.date, "Payment", pmt.voucher_no, pmt.narration, line.amount, 0, voucher=pmt)
         if pmt.through_id == acc_id:
-            _append_entry(entries, pmt.date, "Payment", pmt.voucher_no, pmt.narration, 0, pmt.total_amount)
+            _append_entry(entries, pmt.date, "Payment", pmt.voucher_no, pmt.narration, 0, pmt.total_amount, voucher=pmt)
 
     for rec in Receipt.objects.select_related("through").prefetch_related("lines__account"):
         if rec.through_id == acc_id:
-            _append_entry(entries, rec.date, "Receipt", rec.voucher_no, rec.narration, rec.total_amount, 0)
+            _append_entry(entries, rec.date, "Receipt", rec.voucher_no, rec.narration, rec.total_amount, 0, voucher=rec)
         for line in rec.lines.all():
             if line.account_id == acc_id:
-                _append_entry(entries, rec.date, "Receipt", rec.voucher_no, rec.narration, 0, line.amount)
+                _append_entry(entries, rec.date, "Receipt", rec.voucher_no, rec.narration, 0, line.amount, voucher=rec)
 
     journals = (
         Journal.objects.filter(lines__account_id=acc_id)
@@ -1324,8 +1417,7 @@ def _voucher_entries_for_account(account):
                 jv.voucher_no,
                 line.remarks or jv.narration,
                 line.debit,
-                line.credit,
-            )
+                line.credit, voucher=jv)
 
     entries.sort(key=lambda e: (e["date"], e["vtype"], e["voucher_no"]))
     return entries

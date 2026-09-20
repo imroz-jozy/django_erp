@@ -1,0 +1,55 @@
+{% extends "admin/masters/report_base.html" %}
+
+{% block report_body %}
+<div class="erp-breadcrumbs">
+  <a href="{% url 'admin:erp_group_summary_index' %}?from={{ date_from|date:'Y-m-d' }}&amp;to={{ date_to|date:'Y-m-d' }}{% if natures_param %}&amp;natures={{ natures_param }}{% endif %}">All Groups</a>
+  {% for crumb in breadcrumbs %}
+  &raquo;
+  <a href="{% url 'admin:erp_group_summary' crumb.id %}?from={{ date_from|date:'Y-m-d' }}&amp;to={{ date_to|date:'Y-m-d' }}">{{ crumb.name }}</a>
+  {% endfor %}
+</div>
+
+<table class="erp-report">
+  <thead>
+    <tr>
+      <th>Group / Ledger</th>
+      <th class="num">Debit</th>
+      <th class="num">Credit</th>
+      <th class="num">Balance</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in child_groups %}
+    <tr>
+      <td>
+        <a href="{% url 'admin:erp_group_summary' row.group.id %}?from={{ date_from|date:'Y-m-d' }}&amp;to={{ date_to|date:'Y-m-d' }}">
+          <strong>{{ row.group.name }}</strong>
+        </a>
+      </td>
+      <td class="num">{{ row.debit }}</td>
+      <td class="num">{{ row.credit }}</td>
+      <td class="num">{{ row.balance }} {{ row.dr_cr }}</td>
+    </tr>
+    {% endfor %}
+    {% for row in ledger_rows %}
+    <tr>
+      <td style="padding-left:20px">
+        <a href="{% url 'admin:erp_ledger' row.account.id %}?from={{ date_from|date:'Y-m-d' }}&amp;to={{ date_to|date:'Y-m-d' }}">{{ row.account.account_name }}</a>
+      </td>
+      <td class="num">{{ row.debit }}</td>
+      <td class="num">{{ row.credit }}</td>
+      <td class="num">{{ row.display }} {{ row.dr_cr }}</td>
+    </tr>
+    {% endfor %}
+    {% if not child_groups and not ledger_rows %}
+    <tr><td colspan="4">Nothing posted here in this period.</td></tr>
+    {% endif %}
+    <tr class="total">
+      <td>Total</td>
+      <td class="num">{{ total_debit }}</td>
+      <td class="num">{{ total_credit }}</td>
+      <td></td>
+    </tr>
+  </tbody>
+</table>
+{% endblock %}

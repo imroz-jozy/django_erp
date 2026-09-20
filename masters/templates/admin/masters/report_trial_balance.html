@@ -1,5 +1,9 @@
 {% extends "admin/masters/report_base.html" %}
 
+{% block report_filters %}
+<a href="{% url 'admin:erp_group_summary_index' %}?from={{ date_from|date:'Y-m-d' }}&amp;to={{ date_to|date:'Y-m-d' }}" class="button" style="margin-left:8px;">View by Group</a>
+{% endblock %}
+
 {% block report_body %}
 <table class="erp-report">
   <thead>

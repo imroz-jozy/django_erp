@@ -5,15 +5,76 @@
 <style>
   .erp-filter { margin: 0 0 16px; padding: 8px 0; }
   .erp-filter input[type="date"] { margin-right: 8px; }
+  .erp-search { margin: 0 0 12px; }
+  .erp-search input[type="search"] { width: 260px; max-width: 100%; }
   .erp-report { width: 100%; border-collapse: collapse; }
-  .erp-report th, .erp-report td { padding: 6px 8px; border-bottom: 1px solid var(--border-color, #ddd); }
+  .erp-report th, .erp-report td { padding: 6px 8px; border-bottom: 1px solid var(--border-color, #ddd); white-space: nowrap; }
   .erp-report .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .erp-report .total td { font-weight: 700; border-top: 2px solid currentColor; }
   .erp-report .group { font-weight: 700; background: var(--darkened-bg, #f8f8f8); }
   .erp-split { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .erp-breadcrumbs { margin: 0 0 12px; }
+  .erp-breadcrumbs a { margin-right: 4px; }
+  /* Scrollable report tables: both axes scroll, header stays pinned to
+     the top of the scroll area and the totals row stays pinned to the
+     bottom, so the column headings and the running total are always
+     visible no matter how far you've scrolled. */
+  .erp-report-scroll {
+    max-height: 70vh;
+    overflow: auto;
+    border: 1px solid var(--border-color, #ddd);
+    margin-bottom: 1rem;
+    -webkit-overflow-scrolling: touch;
+  }
+  .erp-report-scroll .erp-report { margin-bottom: 0; }
+  .erp-report-scroll .erp-report thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--body-bg, #fff);
+    box-shadow: 0 1px 0 var(--border-color, #ddd);
+  }
+  .erp-report-scroll .erp-report tbody tr.total td {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    background: var(--body-bg, #fff);
+    box-shadow: 0 -1px 0 currentColor;
+  }
   .table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 1rem; width: 100%; }
   @media (max-width: 900px) { .erp-split { grid-template-columns: 1fr; } }
 </style>
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    // Wrap every report table in a scroll container (both axes) with a
+    // sticky header row and sticky totals row - applies to every report
+    // page automatically, no per-template changes needed.
+    document.querySelectorAll(".erp-report").forEach(function (table) {
+      if (table.closest(".erp-report-scroll")) return;
+      var wrapper = document.createElement("div");
+      wrapper.className = "erp-report-scroll";
+      table.parentNode.insertBefore(wrapper, table);
+      wrapper.appendChild(table);
+    });
+
+    // Generic instant search: filters rows of every .erp-report table on
+    // this page by plain substring match. Purely client-side - it never
+    // changes what was fetched from the server, only what's shown.
+    var input = document.getElementById("erp-report-search");
+    if (!input) return;
+    var tables = document.querySelectorAll(".erp-report");
+    input.addEventListener("input", function () {
+      var q = input.value.trim().toLowerCase();
+      tables.forEach(function (table) {
+        table.querySelectorAll("tbody tr").forEach(function (row) {
+          if (row.classList.contains("total")) return;
+          var text = row.textContent.toLowerCase();
+          row.style.display = (!q || text.indexOf(q) !== -1) ? "" : "none";
+        });
+      });
+    });
+  });
+</script>
 {% endblock %}
 
 {% block content %}
@@ -24,5 +85,8 @@
   <button type="submit" class="button">Show</button>
   <a href="{% url 'admin:index' %}" style="margin-left:12px;">Back to admin</a>
 </form>
+<div class="erp-search">
+  <input type="search" id="erp-report-search" placeholder="Search this report...">
+</div>
 {% block report_body %}{% endblock %}
 {% endblock %}

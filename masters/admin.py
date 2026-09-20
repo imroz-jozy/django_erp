@@ -79,6 +79,7 @@ from .reports import (
     balance_sheet,
     credit_note_register,
     debit_note_register,
+    group_drill,
     gst_outward_summary,
     hsn_summary,
     journal_register,
@@ -419,6 +420,19 @@ def ledger_view(request, account_id=None):
                 "data": data,
             },
         ),
+    )
+
+
+def group_drill_view(request, group_id=None):
+    date_from, date_to = period_from_request(request)
+    natures_param = request.GET.get("natures")
+    natures = natures_param.split(",") if natures_param else None
+    data = group_drill(date_from, date_to, group_id=group_id, natures=natures)
+    title = f"Group Summary — {data['current'].name}" if data["current"] else "Group Summary"
+    return TemplateResponse(
+        request,
+        "admin/masters/report_group_summary.html",
+        _report_context(request, title, {**data, "natures_param": natures_param or ""}),
     )
 
 
@@ -1111,6 +1125,16 @@ if not getattr(admin.site, "_erp_urls_patched", False):
                 "reports/ledger/<int:account_id>/",
                 admin.site.admin_view(ledger_view),
                 name="erp_ledger",
+            ),
+            path(
+                "reports/group-summary/",
+                admin.site.admin_view(group_drill_view),
+                name="erp_group_summary_index",
+            ),
+            path(
+                "reports/group-summary/<int:group_id>/",
+                admin.site.admin_view(group_drill_view),
+                name="erp_group_summary",
             ),
             path(
                 "masters/item-detail/<int:item_id>/",

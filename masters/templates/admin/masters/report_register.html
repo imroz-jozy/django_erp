@@ -1,4 +1,5 @@
 {% extends "admin/masters/report_base.html" %}
+{% load erp_extras %}
 
 {% block report_body %}
 <table class="erp-report">
@@ -18,7 +19,11 @@
     {% for row in rows %}
     <tr>
       <td>{{ row.voucher.date }}</td>
-      <td>{% firstof row.voucher.invoice_no row.voucher.voucher_no %}</td>
+      <td>
+        {% with url=row.voucher|admin_url %}
+        {% if url %}<a href="{{ url }}">{% firstof row.voucher.invoice_no row.voucher.voucher_no %}</a>{% else %}{% firstof row.voucher.invoice_no row.voucher.voucher_no %}{% endif %}
+        {% endwith %}
+      </td>
       <td>{% firstof row.voucher.sale_type row.voucher.purchase_type %}</td>
       <td>{{ row.voucher.account }}</td>
       <td class="num">{{ row.totals.item_basic_amount }}</td>
