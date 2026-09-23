@@ -95,6 +95,27 @@ from .reports import (
     trial_balance,
 )
 
+
+class TaxInclusiveSelect(forms.Select):
+    """Django select widget that tags each option with a data-tax-inclusive
+    attribute so the client-side voucher_helper.js can pick up the correct
+    pricing regime (exclusive or inclusive) without an extra round-trip."""
+
+    def __init__(self, attrs=None, choices=(), model=None):
+        super().__init__(attrs, choices)
+        self.model = model
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex, attrs)
+        if value and self.model and hasattr(self.model, "tax_inclusive"):
+            try:
+                obj = self.model.objects.get(pk=value)
+                option["attrs"]["data-tax-inclusive"] = "1" if obj.tax_inclusive else "0"
+            except (self.model.DoesNotExist, ValueError, TypeError):
+                pass
+        return option
+
+
 admin.site.site_header = "ERP"
 admin.site.site_title = "ERP Admin"
 admin.site.index_title = "Masters, Vouchers & Reports"
@@ -1916,7 +1937,7 @@ class SaleAdmin(VoucherAdminMixin, admin.ModelAdmin):
     list_display = ("invoice_no", "date", "sale_type", "account", "net_amount_list")
     search_fields = ("invoice_no", "account__account_name")
     list_filter = ("date", "sale_type")
-    autocomplete_fields = ("account", "sale_type")
+    autocomplete_fields = ("account",)
     inlines = [SaleItemInline, SaleBillSundryInline]
     fieldsets = (
         (None, {"fields": ("date", "invoice_no", "sale_type", "account", "narration"), "classes": ("erp-voucher-header",)}),
@@ -1939,6 +1960,11 @@ class SaleAdmin(VoucherAdminMixin, admin.ModelAdmin):
     class Media:
         js = ("masters/js/voucher_helper.js",)
 
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "sale_type":
+            kwargs["widget"] = TaxInclusiveSelect(model=SaleType)
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
     @admin.display(description="Net")
     def net_amount_list(self, obj):
         return obj.net_amount
@@ -1950,7 +1976,7 @@ class PurchaseAdmin(VoucherAdminMixin, admin.ModelAdmin):
     list_display = ("invoice_no", "date", "purchase_type", "account", "is_reverse_charge", "net_amount_list")
     search_fields = ("invoice_no", "account__account_name")
     list_filter = ("date", "purchase_type", "is_reverse_charge")
-    autocomplete_fields = ("account", "purchase_type")
+    autocomplete_fields = ("account",)
     inlines = [PurchaseItemInline, PurchaseBillSundryInline]
     fieldsets = (
         (
@@ -1979,6 +2005,11 @@ class PurchaseAdmin(VoucherAdminMixin, admin.ModelAdmin):
     class Media:
         js = ("masters/js/voucher_helper.js",)
 
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "purchase_type":
+            kwargs["widget"] = TaxInclusiveSelect(model=PurchaseType)
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
     @admin.display(description="Net")
     def net_amount_list(self, obj):
         return obj.net_amount
@@ -1990,7 +2021,7 @@ class SaleReturnAdmin(VoucherAdminMixin, admin.ModelAdmin):
     list_display = ("voucher_no", "date", "sale_type", "account", "against_sale", "net_amount_list")
     search_fields = ("voucher_no", "account__account_name", "against_sale__invoice_no")
     list_filter = ("date", "sale_type")
-    autocomplete_fields = ("account", "sale_type", "against_sale")
+    autocomplete_fields = ("account", "against_sale")
     inlines = [SaleReturnItemInline, SaleReturnBillSundryInline]
     fieldsets = (
         (
@@ -2019,6 +2050,11 @@ class SaleReturnAdmin(VoucherAdminMixin, admin.ModelAdmin):
     class Media:
         js = ("masters/js/voucher_helper.js",)
 
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "sale_type":
+            kwargs["widget"] = TaxInclusiveSelect(model=SaleType)
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
     @admin.display(description="Net")
     def net_amount_list(self, obj):
         return obj.net_amount
@@ -2030,7 +2066,7 @@ class PurchaseReturnAdmin(VoucherAdminMixin, admin.ModelAdmin):
     list_display = ("voucher_no", "date", "purchase_type", "account", "against_purchase", "net_amount_list")
     search_fields = ("voucher_no", "account__account_name", "against_purchase__invoice_no")
     list_filter = ("date", "purchase_type")
-    autocomplete_fields = ("account", "purchase_type", "against_purchase")
+    autocomplete_fields = ("account", "against_purchase")
     inlines = [PurchaseReturnItemInline, PurchaseReturnBillSundryInline]
     fieldsets = (
         (
@@ -2058,6 +2094,11 @@ class PurchaseReturnAdmin(VoucherAdminMixin, admin.ModelAdmin):
 
     class Media:
         js = ("masters/js/voucher_helper.js",)
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "purchase_type":
+            kwargs["widget"] = TaxInclusiveSelect(model=PurchaseType)
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     @admin.display(description="Net")
     def net_amount_list(self, obj):

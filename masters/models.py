@@ -675,36 +675,110 @@ class ItemLineMixin(models.Model):
         stay keyed off the billed `quantity` only."""
         return money((self.quantity or ZERO) + (self.free_quantity or ZERO))
 
+    def _voucher_tax_inclusive(self):
+        """Determine whether this line's parent voucher (Sale/Purchase/SaleReturn/
+        PurchaseReturn) is configured for tax-inclusive pricing via its linked
+        SaleType/PurchaseType. Returns False if unknown/unsaved."""
+        voucher = None
+        vtype = None
+        if hasattr(self, "sale_id") and self.sale_id:
+            voucher = getattr(self, "sale", None)
+            if voucher and hasattr(voucher, "sale_type"):
+                vtype = voucher.sale_type
+        elif hasattr(self, "purchase_id") and self.purchase_id:
+            voucher = getattr(self, "purchase", None)
+            if voucher and hasattr(voucher, "purchase_type"):
+                vtype = voucher.purchase_type
+        elif hasattr(self, "sale_return_id") and self.sale_return_id:
+            voucher = getattr(self, "sale_return", None)
+            if voucher and hasattr(voucher, "sale_type"):
+                vtype = voucher.sale_type
+        elif hasattr(self, "purchase_return_id") and self.purchase_return_id:
+            voucher = getattr(self, "purchase_return", None)
+            if voucher and hasattr(voucher, "purchase_type"):
+                vtype = voucher.purchase_type
+        return bool(vtype and vtype.tax_inclusive)
+
     @property
     def basic_amount(self):
         if self.quantity is None or self.rate is None:
             return ZERO
-        return money(self.quantity * self.rate)
+        return compute_line_amounts(self, tax_inclusive=self._voucher_tax_inclusive())["basic_amount"]
 
     @property
     def amount_after_discount(self):
-        return money(self.basic_amount - money(self.discount or 0))
+        return compute_line_amounts(self, tax_inclusive=self._voucher_tax_inclusive())["amount_after_discount"]
 
     @property
     def tax_amount(self):
-        return money(self.amount_after_discount * money(self.tax or 0) / Decimal("100"))
+        return compute_line_amounts(self, tax_inclusive=self._voucher_tax_inclusive())["tax_amount"]
 
     @property
     def net_amount(self):
-        return money(self.amount_after_discount + self.tax_amount)
+        return compute_line_amounts(self, tax_inclusive=self._voucher_tax_inclusive())["net_amount"]
 
 
 # =========================================================
 # VOUCHER TOTALS
 # =========================================================
 
-def _item_totals(lines):
+def compute_line_amounts(line, tax_inclusive=False):
+    """Compute a line item's amounts, optionally with tax-inclusive pricing.
+
+    When *tax_inclusive* is False (the legacy default), the entered ``rate``
+    is treated as tax-exclusive, so tax is calculated on top of it
+    (base + tax = net).
+
+    When *tax_inclusive* is True, the entered ``rate`` already includes tax.
+    We back-calculate the taxable base and the embedded tax from the gross,
+    so that (base + tax = gross) and the final net shown equals the user's
+    gross figure (i.e. no extra tax is added on top).
+
+    Discount is always subtracted from the gross (qty × rate) before the
+    inclusive/exclusive split, matching Busy / Tally behaviour.
+    """
+    qty = money(line.quantity or 0)
+    rate = money(line.rate or 0)
+    disc = money(line.discount or 0)
+    tax_pct = money(line.tax or 0)
+
+    basic_gross = money(qty * rate)
+    after_disc_gross = money(basic_gross - disc)
+
+    if tax_inclusive:
+        divisor = money(Decimal("1") + tax_pct / Decimal("100"))
+        if divisor > 0 and basic_gross > 0:
+            basic_base = money(basic_gross / divisor)
+        else:
+            basic_base = basic_gross
+        if divisor > 0 and after_disc_gross > 0:
+            after_disc_base = money(after_disc_gross / divisor)
+        else:
+            after_disc_base = after_disc_gross
+        tax_amt = money(after_disc_gross - after_disc_base)
+        net = after_disc_gross
+    else:
+        basic_base = basic_gross
+        after_disc_base = after_disc_gross
+        tax_amt = money(after_disc_base * tax_pct / Decimal("100"))
+        net = money(after_disc_base + tax_amt)
+
+    return {
+        "basic_amount": basic_base,
+        "amount_after_discount": after_disc_base,
+        "tax_amount": tax_amt,
+        "net_amount": net,
+    }
+
+
+def _item_totals(lines, tax_inclusive=False):
     basic = discount = taxable = tax_amt = ZERO
     for line in lines:
-        basic += line.basic_amount
+        la = compute_line_amounts(line, tax_inclusive=tax_inclusive)
+        basic += la["basic_amount"]
         discount += money(line.discount)
-        taxable += line.amount_after_discount
-        tax_amt += line.tax_amount
+        taxable += la["amount_after_discount"]
+        tax_amt += la["tax_amount"]
     return {
         "item_basic_amount": money(basic),
         "item_discount_amount": money(discount),
@@ -739,8 +813,8 @@ def compute_sundry_amount(sundry, entered_amount, bases, previous_sundry, runnin
     return money(amount)
 
 
-def voucher_totals(item_lines, sundry_lines):
-    bases = _item_totals(item_lines)
+def voucher_totals(item_lines, sundry_lines, tax_inclusive=False):
+    bases = _item_totals(item_lines, tax_inclusive=tax_inclusive)
     running = bases["item_net_amount"]
     previous = ZERO
     sundry_total = ZERO
@@ -855,7 +929,12 @@ class Sale(models.Model):
         super().save(*args, **kwargs)
 
     def totals(self):
-        return voucher_totals(list(self.items.all()), list(self.bill_sundries.all()))
+        tax_inclusive = bool(self.sale_type_id and self.sale_type.tax_inclusive)
+        return voucher_totals(
+            list(self.items.all()),
+            list(self.bill_sundries.all()),
+            tax_inclusive=tax_inclusive,
+        )
 
     @property
     def item_basic_amount(self):
@@ -965,7 +1044,12 @@ class Purchase(models.Model):
         super().save(*args, **kwargs)
 
     def totals(self):
-        return voucher_totals(list(self.items.all()), list(self.bill_sundries.all()))
+        tax_inclusive = bool(self.purchase_type_id and self.purchase_type.tax_inclusive)
+        return voucher_totals(
+            list(self.items.all()),
+            list(self.bill_sundries.all()),
+            tax_inclusive=tax_inclusive,
+        )
 
     @property
     def item_basic_amount(self):
@@ -1292,7 +1376,12 @@ class SaleReturn(models.Model):
         super().save(*args, **kwargs)
 
     def totals(self):
-        return voucher_totals(list(self.items.all()), list(self.bill_sundries.all()))
+        tax_inclusive = bool(self.sale_type_id and self.sale_type.tax_inclusive)
+        return voucher_totals(
+            list(self.items.all()),
+            list(self.bill_sundries.all()),
+            tax_inclusive=tax_inclusive,
+        )
 
     @property
     def item_basic_amount(self):
@@ -1405,7 +1494,12 @@ class PurchaseReturn(models.Model):
         super().save(*args, **kwargs)
 
     def totals(self):
-        return voucher_totals(list(self.items.all()), list(self.bill_sundries.all()))
+        tax_inclusive = bool(self.purchase_type_id and self.purchase_type.tax_inclusive)
+        return voucher_totals(
+            list(self.items.all()),
+            list(self.bill_sundries.all()),
+            tax_inclusive=tax_inclusive,
+        )
 
     @property
     def item_basic_amount(self):

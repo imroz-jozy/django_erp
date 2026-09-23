@@ -8,6 +8,7 @@ from django.urls import NoReverseMatch, reverse
 from .models import (
     Account,
     AccountGroup,
+    compute_line_amounts,
     CreditNote,
     CreditNoteLine,
     DebitNote,
@@ -100,11 +101,13 @@ def build_ledgers(date_from, date_to):
     )
     for sale in sales:
         totals = sale.totals()
+        sale_tax_inclusive = bool(sale.sale_type_id and sale.sale_type.tax_inclusive)
         _post(ledgers, sale.account, debit=totals["net_amount"])
         sales_acc = sale.sale_type.sales_account if sale.sale_type_id else None
         for line in sale.items.all():
             line_acc = line.item.sale_account if (line.item_id and line.item.sale_account_id) else sales_acc
-            _post(ledgers, line_acc, credit=line.amount_after_discount)
+            line_amt = compute_line_amounts(line, tax_inclusive=sale_tax_inclusive)
+            _post(ledgers, line_acc, credit=line_amt["amount_after_discount"])
         if sale.sale_type_id and totals["tax_amount"]:
             for tax_acc, tax_amt in sale.sale_type.tax_postings(totals["tax_amount"]):
                 _post(ledgers, tax_acc, credit=tax_amt)
@@ -137,6 +140,9 @@ def build_ledgers(date_from, date_to):
     )
     for purchase in purchases:
         totals = purchase.totals()
+        purchase_tax_inclusive = bool(
+            purchase.purchase_type_id and purchase.purchase_type.tax_inclusive
+        )
         purchase_acc = (
             purchase.purchase_type.purchase_account if purchase.purchase_type_id else None
         )
@@ -159,7 +165,8 @@ def build_ledgers(date_from, date_to):
             line_acc = (
                 line.item.purchase_account if (line.item_id and line.item.purchase_account_id) else purchase_acc
             )
-            _post(ledgers, line_acc, debit=line.amount_after_discount)
+            line_amt = compute_line_amounts(line, tax_inclusive=purchase_tax_inclusive)
+            _post(ledgers, line_acc, debit=line_amt["amount_after_discount"])
         if purchase.purchase_type_id and totals["tax_amount"]:
             for tax_acc, tax_amt in purchase.purchase_type.tax_postings(totals["tax_amount"]):
                 _post(ledgers, tax_acc, debit=tax_amt)
@@ -192,11 +199,13 @@ def build_ledgers(date_from, date_to):
     )
     for sr in sale_returns:
         totals = sr.totals()
+        sr_tax_inclusive = bool(sr.sale_type_id and sr.sale_type.tax_inclusive)
         _post(ledgers, sr.account, credit=totals["net_amount"])
         return_acc = sr.sale_type.effective_sales_return_account if sr.sale_type_id else None
         for line in sr.items.all():
             line_acc = line.item.sale_account if (line.item_id and line.item.sale_account_id) else return_acc
-            _post(ledgers, line_acc, debit=line.amount_after_discount)
+            line_amt = compute_line_amounts(line, tax_inclusive=sr_tax_inclusive)
+            _post(ledgers, line_acc, debit=line_amt["amount_after_discount"])
         if sr.sale_type_id and totals["tax_amount"]:
             for tax_acc, tax_amt in sr.sale_type.tax_postings(totals["tax_amount"]):
                 _post(ledgers, tax_acc, debit=tax_amt)
@@ -231,13 +240,15 @@ def build_ledgers(date_from, date_to):
     )
     for pr in purchase_returns:
         totals = pr.totals()
+        pr_tax_inclusive = bool(pr.purchase_type_id and pr.purchase_type.tax_inclusive)
         _post(ledgers, pr.account, debit=totals["net_amount"])
         return_acc = pr.purchase_type.effective_purchase_return_account if pr.purchase_type_id else None
         for line in pr.items.all():
             line_acc = (
                 line.item.purchase_account if (line.item_id and line.item.purchase_account_id) else return_acc
             )
-            _post(ledgers, line_acc, credit=line.amount_after_discount)
+            line_amt = compute_line_amounts(line, tax_inclusive=pr_tax_inclusive)
+            _post(ledgers, line_acc, credit=line_amt["amount_after_discount"])
         if pr.purchase_type_id and totals["tax_amount"]:
             for tax_acc, tax_amt in pr.purchase_type.tax_postings(totals["tax_amount"]):
                 _post(ledgers, tax_acc, credit=tax_amt)
@@ -396,13 +407,20 @@ def stock_figures(date_from, date_to):
 
     # Stock QUANTITY moves by billed + free quantity together (a "10+2"
     # scheme still puts 12 units in the godown); stock VALUE only ever
-    # reflects the billed amount, so amount_after_discount is untouched.
+    # reflects the billed amount, so amount_after_discount is untouched
+    # (after adjusting for tax-inclusive pricing).
     for line in PurchaseItem.objects.filter(
         purchase__date__gte=date_from, purchase__date__lte=date_to, item_id__in=stock_item_ids
-    ).select_related("item"):
+    ).select_related("item", "purchase", "purchase__purchase_type"):
+        p_ti = bool(
+            line.purchase_id
+            and line.purchase.purchase_type_id
+            and line.purchase.purchase_type.tax_inclusive
+        )
+        line_amt = compute_line_amounts(line, tax_inclusive=p_ti)
         purchase_qty[line.item_id] += line.total_quantity
-        purchase_amt[line.item_id] += line.amount_after_discount
-        purchase_value_total += line.amount_after_discount
+        purchase_amt[line.item_id] += line_amt["amount_after_discount"]
+        purchase_value_total += line_amt["amount_after_discount"]
 
     # Accumulate period sales per item
     sale_qty = defaultdict(lambda: ZERO)
@@ -507,9 +525,12 @@ def _sale_line_facts(sale_qs):
     taxable value + CGST/SGST/IGST/Cess for that line alone."""
     for sale in sale_qs:
         is_b2b = bool(sale.account.gst)
+        sale_ti = bool(sale.sale_type_id and sale.sale_type.tax_inclusive)
         for line in sale.items.all():
-            taxable = line.amount_after_discount
-            cgst, sgst, igst = _line_tax_split(sale.sale_type, line.tax_amount)
+            line_amt = compute_line_amounts(line, tax_inclusive=sale_ti)
+            taxable = line_amt["amount_after_discount"]
+            line_tax = line_amt["tax_amount"]
+            cgst, sgst, igst = _line_tax_split(sale.sale_type, line_tax)
             cess = money(taxable * money(line.item.cess_rate or 0) / Decimal("100"))
             yield {
                 "date": sale.date,
@@ -535,9 +556,12 @@ def _sale_return_line_facts(sr_qs):
     HSN summary and to build the Credit/Debit Notes section)."""
     for sr in sr_qs:
         is_b2b = bool(sr.account.gst)
+        sr_ti = bool(sr.sale_type_id and sr.sale_type.tax_inclusive)
         for line in sr.items.all():
-            taxable = line.amount_after_discount
-            cgst, sgst, igst = _line_tax_split(sr.sale_type, line.tax_amount)
+            line_amt = compute_line_amounts(line, tax_inclusive=sr_ti)
+            taxable = line_amt["amount_after_discount"]
+            line_tax = line_amt["tax_amount"]
+            cgst, sgst, igst = _line_tax_split(sr.sale_type, line_tax)
             cess = money(taxable * money(line.item.cess_rate or 0) / Decimal("100"))
             yield {
                 "date": sr.date,
@@ -1169,6 +1193,7 @@ def _voucher_entries_for_account(account):
     )
     for sale in sales:
         totals = sale.totals()
+        sale_ti = bool(sale.sale_type_id and sale.sale_type.tax_inclusive)
         if sale.account_id == acc_id:
             _append_entry(
                 entries, sale.date, "Sale", sale.invoice_no, sale.narration, totals["net_amount"], 0, voucher=sale)
@@ -1176,8 +1201,9 @@ def _voucher_entries_for_account(account):
         for line in sale.items.all():
             line_acc = line.item.sale_account if (line.item_id and line.item.sale_account_id) else sales_acc
             if line_acc and line_acc.id == acc_id:
+                line_amt = compute_line_amounts(line, tax_inclusive=sale_ti)
                 _append_entry(
-                    entries, sale.date, "Sale", sale.invoice_no, sale.narration, 0, line.amount_after_discount, voucher=sale)
+                    entries, sale.date, "Sale", sale.invoice_no, sale.narration, 0, line_amt["amount_after_discount"], voucher=sale)
         if sale.sale_type_id and totals["tax_amount"]:
             for tax_acc, tax_amt in sale.sale_type.tax_postings(totals["tax_amount"]):
                 if tax_acc and tax_acc.id == acc_id:
@@ -1211,6 +1237,9 @@ def _voucher_entries_for_account(account):
     )
     for purchase in purchases:
         totals = purchase.totals()
+        purchase_ti = bool(
+            purchase.purchase_type_id and purchase.purchase_type.tax_inclusive
+        )
         purchase_acc = (
             purchase.purchase_type.purchase_account if purchase.purchase_type_id else None
         )
@@ -1247,13 +1276,14 @@ def _voucher_entries_for_account(account):
                 line.item.purchase_account if (line.item_id and line.item.purchase_account_id) else purchase_acc
             )
             if line_acc and line_acc.id == acc_id:
+                line_amt = compute_line_amounts(line, tax_inclusive=purchase_ti)
                 _append_entry(
                     entries,
                     purchase.date,
                     "Purchase",
                     purchase.invoice_no,
                     purchase.narration,
-                    line.amount_after_discount,
+                    line_amt["amount_after_discount"],
                     0, voucher=purchase)
         if purchase.purchase_type_id and totals["tax_amount"]:
             for tax_acc, tax_amt in purchase.purchase_type.tax_postings(totals["tax_amount"]):
@@ -1307,6 +1337,7 @@ def _voucher_entries_for_account(account):
     )
     for sr in sale_returns:
         totals = sr.totals()
+        sr_ti = bool(sr.sale_type_id and sr.sale_type.tax_inclusive)
         if sr.account_id == acc_id:
             _append_entry(
                 entries, sr.date, "Sale Return", sr.voucher_no, sr.narration, 0, totals["net_amount"], voucher=sr)
@@ -1314,8 +1345,9 @@ def _voucher_entries_for_account(account):
         for line in sr.items.all():
             line_acc = line.item.sale_account if (line.item_id and line.item.sale_account_id) else return_acc
             if line_acc and line_acc.id == acc_id:
+                line_amt = compute_line_amounts(line, tax_inclusive=sr_ti)
                 _append_entry(
-                    entries, sr.date, "Sale Return", sr.voucher_no, sr.narration, line.amount_after_discount, 0, voucher=sr)
+                    entries, sr.date, "Sale Return", sr.voucher_no, sr.narration, line_amt["amount_after_discount"], 0, voucher=sr)
         if sr.sale_type_id and totals["tax_amount"]:
             for tax_acc, tax_amt in sr.sale_type.tax_postings(totals["tax_amount"]):
                 if tax_acc and tax_acc.id == acc_id:
@@ -1347,6 +1379,7 @@ def _voucher_entries_for_account(account):
     )
     for pr in purchase_returns:
         totals = pr.totals()
+        pr_ti = bool(pr.purchase_type_id and pr.purchase_type.tax_inclusive)
         if pr.account_id == acc_id:
             _append_entry(
                 entries, pr.date, "Purchase Return", pr.voucher_no, pr.narration, totals["net_amount"], 0, voucher=pr)
@@ -1356,8 +1389,9 @@ def _voucher_entries_for_account(account):
                 line.item.purchase_account if (line.item_id and line.item.purchase_account_id) else return_acc
             )
             if line_acc and line_acc.id == acc_id:
+                line_amt = compute_line_amounts(line, tax_inclusive=pr_ti)
                 _append_entry(
-                    entries, pr.date, "Purchase Return", pr.voucher_no, pr.narration, 0, line.amount_after_discount, voucher=pr)
+                    entries, pr.date, "Purchase Return", pr.voucher_no, pr.narration, 0, line_amt["amount_after_discount"], voucher=pr)
         if pr.purchase_type_id and totals["tax_amount"]:
             for tax_acc, tax_amt in pr.purchase_type.tax_postings(totals["tax_amount"]):
                 if tax_acc and tax_acc.id == acc_id:

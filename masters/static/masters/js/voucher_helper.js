@@ -1,6 +1,45 @@
 (function($) {
     'use strict';
 
+    function isTaxInclusive() {
+        var $typeSelect = $('#id_sale_type, #id_purchase_type').first();
+        if (!$typeSelect.length) return false;
+        var $opt = $typeSelect.find('option:selected');
+        if (!$opt.length) return false;
+        return $opt.data('tax-inclusive') === true || $opt.data('tax-inclusive') === '1' || $opt.data('tax-inclusive') === 1;
+    }
+
+    function calcLine(qty, rate, discount, taxPercent, taxInclusive) {
+        var basicGross = qty * rate;
+        var afterDiscGross = basicGross - discount;
+        var basicBase, afterDiscBase, taxAmt, net;
+
+        if (taxInclusive) {
+            var divisor = 1 + (taxPercent / 100);
+            basicBase = (divisor > 0 && basicGross > 0) ? (basicGross / divisor) : basicGross;
+            afterDiscBase = (divisor > 0 && afterDiscGross > 0) ? (afterDiscGross / divisor) : afterDiscGross;
+            taxAmt = afterDiscGross - afterDiscBase;
+            net = afterDiscGross;
+        } else {
+            basicBase = basicGross;
+            afterDiscBase = afterDiscGross;
+            taxAmt = afterDiscBase * (taxPercent / 100);
+            net = afterDiscBase + taxAmt;
+        }
+
+        return {
+            basicAmount: round2(basicBase),
+            amountAfterDiscount: round2(afterDiscBase),
+            taxAmount: round2(taxAmt),
+            netAmount: round2(net),
+            afterDiscGross: round2(afterDiscGross),
+        };
+    }
+
+    function round2(v) {
+        return Math.round((v + Number.EPSILON) * 100) / 100;
+    }
+
     $(document).ready(function() {
         // Event delegation for item selection changes
         $(document).on('change', '.field-item select', function() {
@@ -65,6 +104,14 @@
             }
         );
 
+        // Recalculate everything when the sale/purchase type changes (affects tax_inclusive)
+        $(document).on('change', '#id_sale_type, #id_purchase_type', function() {
+            $('#items-group tbody tr.form-row:not(.empty-form)').each(function() {
+                calculateRowTotals($(this));
+            });
+            calculateVoucherTotals();
+        });
+
         $(document).on('input change keyup', '#bill_sundries-group tbody tr.form-row .field-amount input', function() {
             calculateVoucherTotals();
         });
@@ -102,6 +149,7 @@
     function calculateRowTotals($row) {
         if ($row.hasClass('empty-form')) return;
 
+        var taxInclusive = isTaxInclusive();
         var parsedQty = parseQtyInput($row.find('.field-quantity input').val());
         var qty = parsedQty.billed;
         var freeQty = parsedQty.free;
@@ -112,23 +160,21 @@
         // Free quantity (e.g. a "10+2" scheme) moves stock but is never
         // billed, so it stays out of every amount below - only the
         // informational Total Qty cell reflects it.
-        var basicAmount = qty * rate;
-        var amountAfterDiscount = basicAmount - discount;
-        var taxAmount = amountAfterDiscount * (taxPercent / 100);
-        var netAmount = amountAfterDiscount + taxAmount;
+        var r = calcLine(qty, rate, discount, taxPercent, taxInclusive);
 
         // Display calculations in read-only cells
         updateReadonlyText($row.find('.field-total_quantity'), qty + freeQty);
-        updateReadonlyText($row.find('.field-basic_amount'), basicAmount);
-        updateReadonlyText($row.find('.field-amount_after_discount'), amountAfterDiscount);
-        updateReadonlyText($row.find('.field-tax_amount'), taxAmount);
-        updateReadonlyText($row.find('.field-net_amount'), netAmount);
+        updateReadonlyText($row.find('.field-basic_amount'), r.basicAmount);
+        updateReadonlyText($row.find('.field-amount_after_discount'), r.amountAfterDiscount);
+        updateReadonlyText($row.find('.field-tax_amount'), r.taxAmount);
+        updateReadonlyText($row.find('.field-net_amount'), r.netAmount);
 
         // Recalculate voucher totals
         calculateVoucherTotals();
     }
 
     function calculateVoucherTotals() {
+        var taxInclusive = isTaxInclusive();
         var totalBasic = 0;
         var totalDiscount = 0;
         var totalAmount = 0;
@@ -136,19 +182,18 @@
 
         $('#items-group tbody tr.form-row:not(.empty-form)').each(function() {
             var $row = $(this);
-            var qty = parseQtyInput($row.find('.field-quantity input').val()).billed;
+            var parsedQty = parseQtyInput($row.find('.field-quantity input').val());
+            var qty = parsedQty.billed;
             var rate = parseFloat($row.find('.field-rate input').val()) || 0;
             var discount = parseFloat($row.find('.field-discount input').val()) || 0;
             var taxPercent = parseFloat($row.find('.field-tax input').val()) || 0;
 
-            var basicAmount = qty * rate;
-            var amountAfterDiscount = basicAmount - discount;
-            var taxAmount = amountAfterDiscount * (taxPercent / 100);
+            var r = calcLine(qty, rate, discount, taxPercent, taxInclusive);
 
-            totalBasic += basicAmount;
+            totalBasic += r.basicAmount;
             totalDiscount += discount;
-            totalAmount += amountAfterDiscount;
-            totalTax += taxAmount;
+            totalAmount += r.amountAfterDiscount;
+            totalTax += r.taxAmount;
         });
 
         var totalSundry = 0;
