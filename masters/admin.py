@@ -1318,6 +1318,24 @@ class SaleItemForm(QuantityWithFreeSchemeForm):
         # Deliberately excludes free_quantity: clean_quantity() above sets
         # it on the instance directly from the "10+2" text in Quantity.
         fields = ("item", "unit", "quantity", "rate", "discount", "tax")
+        widgets = {
+            "item": forms.Select(attrs={"class": "v-input-item"}),
+            "unit": forms.Select(attrs={"class": "v-input-unit"}),
+            "quantity": forms.TextInput(attrs={"class": "v-input-qty num-input", "placeholder": "10 or 10+2"}),
+            "rate": forms.NumberInput(attrs={"class": "v-input-rate num-input", "step": "0.01"}),
+            "discount": forms.NumberInput(attrs={"class": "v-input-disc num-input", "step": "0.01"}),
+            "tax": forms.NumberInput(attrs={"class": "v-input-tax num-input", "step": "0.01"}),
+        }
+
+
+class SaleBillSundryForm(forms.ModelForm):
+    class Meta:
+        model = SaleBillSundry
+        fields = ("bill_sundry", "amount")
+        widgets = {
+            "bill_sundry": forms.Select(attrs={"class": "v-input-sundry"}),
+            "amount": forms.NumberInput(attrs={"class": "v-input-sundry-amt num-input", "step": "0.01"}),
+        }
 
 
 class PurchaseItemForm(QuantityWithFreeSchemeForm):
@@ -1342,7 +1360,6 @@ class SaleItemInline(admin.TabularInline):
     model = SaleItem
     form = SaleItemForm
     extra = 1
-    autocomplete_fields = ("item", "unit")
     readonly_fields = ("total_quantity", "basic_amount", "amount_after_discount", "tax_amount", "net_amount")
     fields = (
         "item",
@@ -1361,8 +1378,8 @@ class SaleItemInline(admin.TabularInline):
 
 class SaleBillSundryInline(admin.TabularInline):
     model = SaleBillSundry
+    form = SaleBillSundryForm
     extra = 1
-    autocomplete_fields = ("bill_sundry",)
 
 
 class PurchaseItemInline(admin.TabularInline):
@@ -1931,13 +1948,24 @@ class VoucherAdminMixin:
     net_amount.short_description = "Net amount"
 
 
+class SaleForm(forms.ModelForm):
+    class Meta:
+        model = Sale
+        fields = "__all__"
+        widgets = {
+            "account": forms.Select(attrs={"class": "v-input-account"}),
+            "narration": forms.TextInput(attrs={"placeholder": "Narration / Remarks...", "class": "v-input-narration"}),
+        }
+
+
 @admin.register(Sale)
 class SaleAdmin(VoucherAdminMixin, admin.ModelAdmin):
+    form = SaleForm
     change_list_template = "admin/masters/sale/change_list.html"
+    change_form_template = "admin/masters/sale/change_form.html"
     list_display = ("invoice_no", "date", "sale_type", "account", "net_amount_list")
     search_fields = ("invoice_no", "account__account_name")
     list_filter = ("date", "sale_type")
-    autocomplete_fields = ("account",)
     inlines = [SaleItemInline, SaleBillSundryInline]
     fieldsets = (
         (None, {"fields": ("date", "invoice_no", "sale_type", "account", "narration"), "classes": ("erp-voucher-header",)}),
@@ -1958,7 +1986,10 @@ class SaleAdmin(VoucherAdminMixin, admin.ModelAdmin):
     )
 
     class Media:
-        js = ("masters/js/voucher_helper.js",)
+        css = {
+            "all": ("masters/css/sale_voucher.css",)
+        }
+        js = ("masters/js/sale_voucher.js",)
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "sale_type":
