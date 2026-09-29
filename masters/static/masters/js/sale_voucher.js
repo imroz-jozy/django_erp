@@ -237,12 +237,14 @@
             }
         }, true);
 
-        // Trigger item details for pre-selected items
-        $('.v-input-item, select[name$="-item"]').each(function() {
-            if ($(this).val() && !isNaN($(this).val())) {
-                fetchItemDetails($(this));
-            }
-        });
+        // NOTE: we deliberately do NOT re-fetch/overwrite item details for rows
+        // that already have an item pre-selected on page load. That used to run
+        // here and clobbered every existing row's saved rate/tax/unit with the
+        // item's CURRENT default price every time an existing voucher was
+        // opened to edit - which is why Rate showed as 0 (or today's price)
+        // after modifying a saved sale. fetchItemDetails() still runs correctly
+        // when the user actually changes an item dropdown (see the 'change'
+        // listener above) - that's the only case it should ever fire.
 
         // Listen for value inputs to recalculate instantly
         $(document).on('input change keyup', '.v-input-qty, .v-input-rate, .v-input-disc, .v-input-tax, .v-input-sundry-amt, #id_sale_type, input[name$="-quantity"], input[name$="-rate"], input[name$="-discount"], input[name$="-tax"]', function() {
@@ -321,6 +323,57 @@
             updateCalculations();
         });
 
+        // Re-sequence the JS-added (not-yet-saved) rows after one is removed, so
+        // there's no gap in the -0-, -1-, -2- form indices. Existing/saved rows
+        // (identified by having a DELETE checkbox) are never renumbered - they
+        // keep their original index and are only hidden + flagged for deletion.
+        // Without this, deleting a newly-added row that wasn't the LAST one
+        // added left a hole in the formset indices, and Django would then
+        // demand "this field is required" for a row that no longer exists on
+        // the page - the save error seen when modifying a bill.
+        function reindexNewRows($tbody, rowSelector, prefix, $totalForms) {
+            var initialCount = parseInt($totalForms.data('initial-count'), 10);
+            if (isNaN(initialCount)) {
+                // First time: whatever isn't a "new" row right now defines the
+                // boundary. Existing rows always have a DELETE checkbox.
+                initialCount = 0;
+                $tbody.children(rowSelector).each(function() {
+                    if ($(this).find('input[type="checkbox"][name$="-DELETE"]').length) {
+                        initialCount++;
+                    }
+                });
+                $totalForms.data('initial-count', initialCount);
+            }
+
+            var idx = initialCount;
+            var prefixRe = new RegExp(prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-\\d+-');
+
+            $tbody.children(rowSelector).each(function() {
+                var $row = $(this);
+                var isExisting = $row.find('input[type="checkbox"][name$="-DELETE"]').length > 0;
+                if (isExisting) { return; } // leave saved rows' indices untouched
+
+                var newPrefix = prefix + '-' + idx + '-';
+                $row.find('[name]').each(function() {
+                    var $el = $(this);
+                    var name = $el.attr('name');
+                    if (name && prefixRe.test(name)) {
+                        $el.attr('name', name.replace(prefixRe, newPrefix));
+                    }
+                });
+                $row.find('[id]').each(function() {
+                    var $el = $(this);
+                    var id = $el.attr('id');
+                    if (id && id.indexOf('id_' + prefix + '-') === 0) {
+                        $el.attr('id', id.replace(prefixRe, newPrefix));
+                    }
+                });
+                idx++;
+            });
+
+            $totalForms.val(idx);
+        }
+
         // Delete Row
         $(document).on('click', '.btn-delete-item-row', function(e) {
             e.preventDefault();
@@ -331,6 +384,7 @@
                 $row.hide().addClass('empty-form-row');
             } else {
                 $row.remove();
+                reindexNewRows($('#busy-items-tbody'), '.item-form-row', 'items', $('#id_items-TOTAL_FORMS'));
             }
             updateCalculations();
         });
@@ -344,6 +398,7 @@
                 $sRow.hide().addClass('empty-sundry-row');
             } else {
                 $sRow.remove();
+                reindexNewRows($('#busy-sundries-tbody'), '.sundry-form-row', 'bill_sundries', $('#id_bill_sundries-TOTAL_FORMS'));
             }
             updateCalculations();
         });

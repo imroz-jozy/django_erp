@@ -97,21 +97,43 @@ from .reports import (
 
 
 class TaxInclusiveSelect(forms.Select):
-    """Django select widget that tags each option with a data-tax-inclusive
-    attribute so the client-side voucher_helper.js can pick up the correct
-    pricing regime (exclusive or inclusive) without an extra round-trip."""
+    """Django select widget that tags each <option> with data-tax-inclusive so
+    the client-side JS can read the pricing regime (exclusive / inclusive)
+    without an extra AJAX round-trip.
+
+    Fix (Django 3.1+): `value` passed to create_option is a
+    ModelChoiceIteratorValue wrapper, not a plain int/str. The old code relied
+    on hasattr(model_class, 'tax_inclusive') and passed the wrapper directly
+    to objects.get(), which could raise TypeError silently and leave the
+    data attribute unset — causing the front-end to always use the exclusive
+    formula even when a tax-inclusive sale type was selected.
+    """
 
     def __init__(self, attrs=None, choices=(), model=None):
         super().__init__(attrs, choices)
         self.model = model
+        # Populated lazily on first render; avoids one DB query per option.
+        self._tax_inclusive_map = None
+
+    def _get_map(self):
+        """Return {pk (int): tax_inclusive (bool)} for all model rows."""
+        if self._tax_inclusive_map is None and self.model is not None:
+            self._tax_inclusive_map = {
+                obj.pk: bool(obj.tax_inclusive)
+                for obj in self.model.objects.only("pk", "tax_inclusive")
+            }
+        return self._tax_inclusive_map or {}
 
     def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
         option = super().create_option(name, value, label, selected, index, subindex, attrs)
-        if value and self.model and hasattr(self.model, "tax_inclusive"):
+        if value:
             try:
-                obj = self.model.objects.get(pk=value)
-                option["attrs"]["data-tax-inclusive"] = "1" if obj.tax_inclusive else "0"
-            except (self.model.DoesNotExist, ValueError, TypeError):
+                # Explicitly cast to int so ModelChoiceIteratorValue works too.
+                pk = int(value)
+                tax_map = self._get_map()
+                if pk in tax_map:
+                    option["attrs"]["data-tax-inclusive"] = "1" if tax_map[pk] else "0"
+            except (ValueError, TypeError):
                 pass
         return option
 
