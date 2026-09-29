@@ -215,14 +215,63 @@
             totalTax += r.taxAmount;
         });
 
+        var bases = {
+            'ITEM_BASIC': totalBasic,
+            'ITEM_DISCOUNT': totalDiscount,
+            'ITEM_AMOUNT': totalAmount,
+            'TAX_AMOUNT': totalTax,
+            'ITEM_NET': totalAmount + totalTax
+        };
+
+        var running = totalAmount + totalTax;
+        var previous = 0;
         var totalSundry = 0;
+
         $('#bill_sundries-group tbody tr.form-row:not(.empty-form)').each(function() {
             var $row = $(this);
-            var amt = parseFloat($row.find('.field-amount input').val()) || 0;
-            totalSundry += amt;
+            var $sundrySelect = $row.find('.field-bill_sundry select');
+            var sundryId = $sundrySelect.val();
+            if (!sundryId || isNaN(sundryId)) return;
+
+            var $opt = $sundrySelect.find('option:selected');
+            var type = $opt.attr('data-type') || 'ADDITIVE';
+            var amountOf = $opt.attr('data-amount-of') || 'PERCENT';
+            var defaultVal = parseFloat($opt.attr('data-default-value')) || 0;
+            var applyOn = $opt.attr('data-apply-on') || 'ITEM_BASIC';
+
+            var applyMap = {
+                'ITEM_BASIC': bases.ITEM_BASIC,
+                'ITEM_DISCOUNT': bases.ITEM_DISCOUNT,
+                'ITEM_AMOUNT': bases.ITEM_AMOUNT,
+                'TAX_AMOUNT': bases.TAX_AMOUNT,
+                'ITEM_NET': bases.ITEM_NET,
+                'BILL_AMOUNT': running,
+                'PREVIOUS_SUNDRY': previous
+            };
+            var base = (applyMap[applyOn] !== undefined) ? applyMap[applyOn] : bases.ITEM_BASIC;
+
+            var $amtInput = $row.find('.field-amount input');
+            var rawVal = $amtInput.val();
+            var entered = parseFloat(rawVal);
+            var amount = 0;
+
+            if (rawVal !== '' && !isNaN(entered)) {
+                amount = Math.abs(entered);
+            } else if (amountOf === 'ABSOLUTE') {
+                amount = defaultVal;
+                $amtInput.val(amount.toFixed(2));
+            } else {
+                amount = round2(base * defaultVal / 100);
+                $amtInput.val(amount.toFixed(2));
+            }
+
+            var signed = (type === 'SUBTRACTIVE') ? -amount : amount;
+            totalSundry += signed;
+            running = round2(running + signed);
+            previous = signed;
         });
 
-        var netAmount = totalAmount + totalTax + totalSundry;
+        var netAmount = running;
 
         // Update voucher totals fields
         updateReadonlyText($('.field-item_basic_amount'), totalBasic);

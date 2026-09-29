@@ -131,6 +131,32 @@ class TaxInclusiveSelect(forms.Select):
             option['attrs']['data-tax-inclusive'] = '1' if ti else '0'
         except Exception:
             pass
+class BillSundrySelect(forms.Select):
+    """Widget that stamps each <option> with data-type, data-amount-of,
+    data-default-value, data-apply-on so client-side JS calculates Bill Sundries
+    matching backend voucher_totals() logic exactly.
+    """
+
+    def __init__(self, attrs=None, choices=(), model=None):
+        super().__init__(attrs, choices)
+        self.model = model or BillSundry
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex, attrs)
+        if not value:
+            return option
+        try:
+            instance = getattr(value, 'instance', None)
+            if instance is None:
+                pk = int(str(value))
+                instance = self.model.objects.only('pk', 'type', 'amount_of', 'default_value', 'apply_on').get(pk=pk)
+            if instance is not None:
+                option['attrs']['data-type'] = str(getattr(instance, 'type', 'ADDITIVE'))
+                option['attrs']['data-amount-of'] = str(getattr(instance, 'amount_of', 'PERCENT'))
+                option['attrs']['data-default-value'] = str(getattr(instance, 'default_value', '0'))
+                option['attrs']['data-apply-on'] = str(getattr(instance, 'apply_on', 'ITEM_BASIC'))
+        except Exception:
+            pass
         return option
 
 
@@ -1345,13 +1371,19 @@ class SaleItemForm(QuantityWithFreeSchemeForm):
             "tax": forms.NumberInput(attrs={"class": "v-input-tax num-input", "step": "0.01"}),
         }
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance and self.instance.pk:
+            # Mark the existing saved item ID so frontend NEVER overwrites the rate on load
+            self.fields["item"].widget.attrs["data-saved-item-id"] = str(self.instance.item_id or "")
+
 
 class SaleBillSundryForm(forms.ModelForm):
     class Meta:
         model = SaleBillSundry
         fields = ("bill_sundry", "amount")
         widgets = {
-            "bill_sundry": forms.Select(attrs={"class": "v-input-sundry"}),
+            "bill_sundry": BillSundrySelect(model=BillSundry, attrs={"class": "v-input-sundry"}),
             "amount": forms.NumberInput(attrs={"class": "v-input-sundry-amt num-input", "step": "0.01"}),
         }
 
@@ -2007,7 +2039,7 @@ class SaleAdmin(VoucherAdminMixin, admin.ModelAdmin):
         css = {
             "all": ("masters/css/sale_voucher.css",)
         }
-        js = ("masters/js/sale_voucher.js",)
+        js = ("masters/js/sale_voucher.js?v=20260929_backend_sync",)
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "sale_type":

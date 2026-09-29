@@ -66,7 +66,9 @@
 
         // Helper: Format currency string
         function fmtMoney(val) {
-            return '₹ ' + round2(val).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            var n = round2(val);
+            var prefix = n < 0 ? '- ₹ ' : '₹ ';
+            return prefix + Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         }
 
         // Check if Sale Type is Tax Inclusive
@@ -128,13 +130,15 @@
         }
 
         // Calculate row & voucher totals
+        // Calculate row & voucher totals (exact mirror of backend voucher_totals in models.py)
         function updateCalculations() {
             var totalBasic = 0;
             var totalDisc = 0;
+            var totalTaxable = 0;
             var totalTax = 0;
             var totalItemsNet = 0;
 
-            // Loop over item rows
+            // 1. Loop over item rows
             $('.item-form-row:not(.empty-form-row)').each(function() {
                 var $row = $(this);
                 var qtyVal = $row.find('.v-input-qty, input[name$="-quantity"]').val();
@@ -152,27 +156,75 @@
 
                 totalBasic += res.basicAmt;
                 totalDisc += (parseFloat(discVal) || 0);
+                totalTaxable += res.afterDiscBase;
                 totalTax += res.taxAmt;
                 totalItemsNet += res.netAmt;
             });
 
-            // Loop over Bill Sundries
+            // 2. Loop over Bill Sundries (matches backend compute_sundry_amount)
+            var bases = {
+                'ITEM_BASIC': totalBasic,
+                'ITEM_DISCOUNT': totalDisc,
+                'ITEM_AMOUNT': totalTaxable,
+                'TAX_AMOUNT': totalTax,
+                'ITEM_NET': totalItemsNet
+            };
+
+            var running = totalItemsNet;
+            var previous = 0;
             var totalSundry = 0;
+
             $('.sundry-form-row:not(.empty-sundry-row)').each(function() {
                 var $sRow = $(this);
-                var amt = parseFloat($sRow.find('.v-input-sundry-amt, input[name$="-amount"]').val()) || 0;
-                totalSundry += amt;
+                var $sundrySelect = $sRow.find('.v-input-sundry, select[name$="-bill_sundry"]');
+                var sundryId = $sundrySelect.val();
+                if (!sundryId || isNaN(sundryId)) return;
+
+                var $opt = $sundrySelect.find('option:selected');
+                var type = $opt.attr('data-type') || 'ADDITIVE';
+                var amountOf = $opt.attr('data-amount-of') || 'PERCENT';
+                var defaultVal = parseFloat($opt.attr('data-default-value')) || 0;
+                var applyOn = $opt.attr('data-apply-on') || 'ITEM_BASIC';
+
+                var applyMap = {
+                    'ITEM_BASIC': bases.ITEM_BASIC,
+                    'ITEM_DISCOUNT': bases.ITEM_DISCOUNT,
+                    'ITEM_AMOUNT': bases.ITEM_AMOUNT,
+                    'TAX_AMOUNT': bases.TAX_AMOUNT,
+                    'ITEM_NET': bases.ITEM_NET,
+                    'BILL_AMOUNT': running,
+                    'PREVIOUS_SUNDRY': previous
+                };
+                var base = (applyMap[applyOn] !== undefined) ? applyMap[applyOn] : bases.ITEM_BASIC;
+
+                var $amtInput = $sRow.find('.v-input-sundry-amt, input[name$="-amount"]');
+                var rawVal = $amtInput.val();
+                var entered = parseFloat(rawVal);
+                var amount = 0;
+
+                if (rawVal !== '' && !isNaN(entered)) {
+                    amount = Math.abs(entered);
+                } else if (amountOf === 'ABSOLUTE') {
+                    amount = defaultVal;
+                    $amtInput.val(amount.toFixed(2));
+                } else {
+                    amount = round2(base * defaultVal / 100);
+                    $amtInput.val(amount.toFixed(2));
+                }
+
+                var signed = (type === 'SUBTRACTIVE') ? -amount : amount;
+                totalSundry += signed;
+                running = round2(running + signed);
+                previous = signed;
             });
 
-            var grandNet = totalItemsNet + totalSundry;
+            var grandNet = running;
 
-            // Update Voucher Totals Summary Box (Desktop)
+            // Update Voucher Totals Summary Box (Desktop & Mobile)
             $('#v-sum-basic').text(fmtMoney(totalBasic));
             $('#v-sum-disc').text(fmtMoney(totalDisc));
             $('#v-sum-tax').text(fmtMoney(totalTax));
             $('#v-sum-sundry').text(fmtMoney(totalSundry));
-            // .v-sum-grand-net appears twice in the markup: once in the desktop
-            // totals card, once in the mobile sticky bar. Both get updated here.
             $('.v-sum-grand-net').text(fmtMoney(grandNet));
         }
 
@@ -201,12 +253,7 @@
 
                         // 2. Set Rate (Default Sale Price)
                         if (data.sale_price !== undefined) {
-                            var price = parseFloat(data.sale_price) || 0;
-                            var $rateInput = $row.find('.v-input-rate, input[name$="-rate"]');
-                            // If the master price is 0 and input already has a rate, keep it unless new line
-                            if (price > 0 || !$rateInput.val() || parseFloat($rateInput.val()) === 0) {
-                                $rateInput.val(price.toFixed(2));
-                            }
+                            $row.find('.v-input-rate, input[name$="-rate"]').val(parseFloat(data.sale_price).toFixed(2));
                         }
 
                         // 3. Set Tax Rate
@@ -238,18 +285,33 @@
 
         // Listen for user item selection change
         function handleItemChange($itemSelect) {
+            var savedId = $itemSelect.attr('data-saved-item-id') || $itemSelect.data('saved-item-id');
             var prevId = $itemSelect.data('previous-item-id');
             var newId = $itemSelect.val() ? String($itemSelect.val()) : '';
-            if (prevId !== undefined && prevId === newId) {
-                // Item didn't change (spurious event triggered on page load/select2 init/focus)
+
+            // If this is an existing saved line and the item was NOT changed: NEVER fetch or overwrite!
+            if (savedId && String(savedId) === newId) {
                 return;
             }
+
+            // If value didn't change: ignore spurious event
+            if (prevId !== undefined && prevId === newId) {
+                return;
+            }
+
             $itemSelect.data('previous-item-id', newId);
             fetchItemDetails($itemSelect);
         }
 
         $(document).on('change select2:select', '.v-input-item, select[name$="-item"], .field-item select', function() {
             handleItemChange($(this));
+        });
+
+        // When Bill Sundry dropdown changes, auto-fill default value and recalculate
+        $(document).on('change', '.v-input-sundry, select[name$="-bill_sundry"]', function() {
+            var $sRow = $(this).closest('.sundry-form-row');
+            $sRow.find('.v-input-sundry-amt, input[name$="-amount"]').val('');
+            updateCalculations();
         });
 
         // Listen for value inputs to recalculate instantly
