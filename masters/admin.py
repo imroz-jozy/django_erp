@@ -131,6 +131,9 @@ class TaxInclusiveSelect(forms.Select):
             option['attrs']['data-tax-inclusive'] = '1' if ti else '0'
         except Exception:
             pass
+        return option
+
+
 class BillSundrySelect(forms.Select):
     """Widget that stamps each <option> with data-type, data-amount-of,
     data-default-value, data-apply-on so client-side JS calculates Bill Sundries
@@ -2039,7 +2042,7 @@ class SaleAdmin(VoucherAdminMixin, admin.ModelAdmin):
         css = {
             "all": ("masters/css/sale_voucher.css",)
         }
-        js = ("masters/js/sale_voucher.js?v=20260929_backend_sync",)
+        js = ("masters/js/sale_voucher.js",)
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "sale_type":
