@@ -27,6 +27,14 @@
       <div style="background:#fee2e2; border:1px solid #f87171; color:#991b1b; border-radius:6px; padding:12px; margin-bottom:12px;">
         <strong>{% translate 'Please correct the errors below:' %}</strong>
         {{ adminform.form.non_field_errors }}
+        {% for inline in inline_admin_formsets %}
+          {{ inline.formset.non_form_errors }}
+          {% for iform in inline.formset.forms %}
+            {% if iform.errors %}
+              <div style="margin-top:4px;">{{ inline.opts.verbose_name }} line {{ forloop.counter }}: {{ iform.errors }}</div>
+            {% endif %}
+          {% endfor %}
+        {% endfor %}
       </div>
     {% endif %}
 
@@ -176,8 +184,7 @@
                   <tr class="item-form-row">
                     <td class="row-num-cell">
                       <span class="row-num">{{ forloop.counter }}</span>
-                      {% for field in inline_admin_form.hidden_fields %}{{ field }}{% endfor %}
-                      {% if inline_admin_form.has_auto_field %}{{ inline_admin_form.pk_field.field }}{% endif %}
+                      {% for field in inline_admin_form.form.hidden_fields %}{{ field }}{% endfor %}
                     </td>
                     <td data-label="Item">
                       <div class="v-input-item-wrap">{{ inline_admin_form.form.item }}</div>
@@ -228,7 +235,7 @@
                     {% if inline_admin_form.original or not forloop.last %}
                       <tr class="sundry-form-row">
                         <td data-label="Bill Sundry">
-                          {% for field in inline_admin_form.hidden_fields %}{{ field }}{% endfor %}
+                          {% for field in inline_admin_form.form.hidden_fields %}{{ field }}{% endfor %}
                           {{ inline_admin_form.form.bill_sundry }}
                         </td>
                         <td data-label="Amount (₹)">{{ inline_admin_form.form.amount }}</td>

@@ -201,7 +201,12 @@
 
                         // 2. Set Rate (Default Sale Price)
                         if (data.sale_price !== undefined) {
-                            $row.find('.v-input-rate, input[name$="-rate"]').val(parseFloat(data.sale_price).toFixed(2));
+                            var price = parseFloat(data.sale_price) || 0;
+                            var $rateInput = $row.find('.v-input-rate, input[name$="-rate"]');
+                            // If the master price is 0 and input already has a rate, keep it unless new line
+                            if (price > 0 || !$rateInput.val() || parseFloat($rateInput.val()) === 0) {
+                                $rateInput.val(price.toFixed(2));
+                            }
                         }
 
                         // 3. Set Tax Rate
@@ -222,29 +227,30 @@
             });
         }
 
+        // Store initial item IDs so spurious change events on page load do NOT overwrite saved rates
+        $('.v-input-item, select[name$="-item"]').each(function() {
+            var val = $(this).val();
+            $(this).data('previous-item-id', val ? String(val) : '');
+        });
+
         // Initial setup
         updateCalculations();
 
-        // Listen for item selection change
-        $(document).on('change select2:select', '.v-input-item, select[name$="-item"], .field-item select', function() {
-            fetchItemDetails($(this));
-        });
-
-        // Native DOM event listener fallback
-        document.addEventListener('change', function(e) {
-            if (e.target && (e.target.classList.contains('v-input-item') || (e.target.name && e.target.name.endsWith('-item')))) {
-                fetchItemDetails($(e.target));
+        // Listen for user item selection change
+        function handleItemChange($itemSelect) {
+            var prevId = $itemSelect.data('previous-item-id');
+            var newId = $itemSelect.val() ? String($itemSelect.val()) : '';
+            if (prevId !== undefined && prevId === newId) {
+                // Item didn't change (spurious event triggered on page load/select2 init/focus)
+                return;
             }
-        }, true);
+            $itemSelect.data('previous-item-id', newId);
+            fetchItemDetails($itemSelect);
+        }
 
-        // NOTE: we deliberately do NOT re-fetch/overwrite item details for rows
-        // that already have an item pre-selected on page load. That used to run
-        // here and clobbered every existing row's saved rate/tax/unit with the
-        // item's CURRENT default price every time an existing voucher was
-        // opened to edit - which is why Rate showed as 0 (or today's price)
-        // after modifying a saved sale. fetchItemDetails() still runs correctly
-        // when the user actually changes an item dropdown (see the 'change'
-        // listener above) - that's the only case it should ever fire.
+        $(document).on('change select2:select', '.v-input-item, select[name$="-item"], .field-item select', function() {
+            handleItemChange($(this));
+        });
 
         // Listen for value inputs to recalculate instantly
         $(document).on('input change keyup', '.v-input-qty, .v-input-rate, .v-input-disc, .v-input-tax, .v-input-sundry-amt, #id_sale_type, input[name$="-quantity"], input[name$="-rate"], input[name$="-discount"], input[name$="-tax"]', function() {
@@ -296,6 +302,9 @@
 
             // Update row number display
             $newRow.find('.row-num').text(formCount + 1);
+
+            // Initialize previous item id for change tracking
+            $newRow.find('.v-input-item, select[name$="-item"]').data('previous-item-id', '');
 
             // Focus item select in new row
             $newRow.find('select[name$="-item"]').focus();

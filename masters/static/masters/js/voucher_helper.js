@@ -41,10 +41,25 @@
     }
 
     $(document).ready(function() {
+        // Store initial item IDs so spurious change events on page load do NOT overwrite saved rates
+        $('.field-item select').each(function() {
+            var val = $(this).val();
+            $(this).data('previous-item-id', val ? String(val) : '');
+        });
+
         // Event delegation for item selection changes
         $(document).on('change', '.field-item select', function() {
             var $select = $(this);
             var item_id = $select.val();
+            var prevId = $select.data('previous-item-id');
+            var newId = item_id ? String(item_id) : '';
+
+            if (prevId !== undefined && prevId === newId) {
+                // Item didn't change (spurious event triggered on page load/select2 init/focus)
+                return;
+            }
+            $select.data('previous-item-id', newId);
+
             var $row = $select.closest('tr');
 
             if (!item_id || isNaN(item_id)) {
@@ -76,8 +91,11 @@
 
                         // 2. Populate Rate based on Purchase vs Sale page
                         var isPurchase = window.location.pathname.indexOf('/purchase/') !== -1;
-                        var rate = isPurchase ? data.purchase_price : data.sale_price;
-                        $row.find('.field-rate input').val(rate.toFixed(2)).trigger('change');
+                        var rate = isPurchase ? (data.purchase_price || 0) : (data.sale_price || 0);
+                        var $rateInput = $row.find('.field-rate input');
+                        if (rate > 0 || !$rateInput.val() || parseFloat($rateInput.val()) === 0) {
+                            $rateInput.val(rate.toFixed(2)).trigger('change');
+                        }
 
                         // 3. Populate Tax
                         $row.find('.field-tax input').val(data.tax.toFixed(2)).trigger('change');
@@ -125,6 +143,7 @@
         // Listen for new inline rows added
         $(document).on('formset:added', function(event, $row, formsetName) {
             if (formsetName === 'items' || formsetName === 'bill_sundries') {
+                $row.find('.field-item select').data('previous-item-id', '');
                 calculateRowTotals($row);
                 calculateVoucherTotals();
             }
