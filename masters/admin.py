@@ -97,44 +97,40 @@ from .reports import (
 
 
 class TaxInclusiveSelect(forms.Select):
-    """Django select widget that tags each <option> with data-tax-inclusive so
-    the client-side JS can read the pricing regime (exclusive / inclusive)
-    without an extra AJAX round-trip.
+    """Widget that stamps each <option> with data-tax-inclusive="1/0" so the
+    client-side sale_voucher.js can apply the correct pricing formula without
+    an extra AJAX round-trip.
 
-    Fix (Django 3.1+): `value` passed to create_option is a
-    ModelChoiceIteratorValue wrapper, not a plain int/str. The old code relied
-    on hasattr(model_class, 'tax_inclusive') and passed the wrapper directly
-    to objects.get(), which could raise TypeError silently and leave the
-    data attribute unset — causing the front-end to always use the exclusive
-    formula even when a tax-inclusive sale type was selected.
+    Django 6.1 changed ModelChoiceIteratorValue to carry the model instance
+    directly (value.instance), so we read tax_inclusive from there.
+    For older Django versions the value is a plain int/str pk, handled by the
+    int(str(value)) fallback path.
     """
 
     def __init__(self, attrs=None, choices=(), model=None):
         super().__init__(attrs, choices)
         self.model = model
-        # Populated lazily on first render; avoids one DB query per option.
-        self._tax_inclusive_map = None
-
-    def _get_map(self):
-        """Return {pk (int): tax_inclusive (bool)} for all model rows."""
-        if self._tax_inclusive_map is None and self.model is not None:
-            self._tax_inclusive_map = {
-                obj.pk: bool(obj.tax_inclusive)
-                for obj in self.model.objects.only("pk", "tax_inclusive")
-            }
-        return self._tax_inclusive_map or {}
 
     def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
         option = super().create_option(name, value, label, selected, index, subindex, attrs)
-        if value:
-            try:
-                # Explicitly cast to int so ModelChoiceIteratorValue works too.
-                pk = int(value)
-                tax_map = self._get_map()
-                if pk in tax_map:
-                    option["attrs"]["data-tax-inclusive"] = "1" if tax_map[pk] else "0"
-            except (ValueError, TypeError):
-                pass
+        if not value:
+            return option
+        try:
+            # Django 6.1+: ModelChoiceIteratorValue(pk, instance) — instance is ready.
+            instance = getattr(value, 'instance', None)
+            if instance is not None and hasattr(instance, 'tax_inclusive'):
+                ti = bool(instance.tax_inclusive)
+            else:
+                # Fallback for older Django: plain pk — do a single DB lookup.
+                pk = int(str(value))
+                if self.model:
+                    obj = self.model.objects.only('pk', 'tax_inclusive').get(pk=pk)
+                    ti = bool(obj.tax_inclusive)
+                else:
+                    return option
+            option['attrs']['data-tax-inclusive'] = '1' if ti else '0'
+        except Exception:
+            pass
         return option
 
 
