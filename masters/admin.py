@@ -120,15 +120,18 @@ class TaxInclusiveSelect(forms.Select):
             instance = getattr(value, 'instance', None)
             if instance is not None and hasattr(instance, 'tax_inclusive'):
                 ti = bool(instance.tax_inclusive)
+                mr = bool(getattr(instance, 'multirate', False))
             else:
                 # Fallback for older Django: plain pk — do a single DB lookup.
                 pk = int(str(value))
                 if self.model:
                     obj = self.model.objects.only('pk', 'tax_inclusive').get(pk=pk)
                     ti = bool(obj.tax_inclusive)
+                    mr = bool(getattr(obj, 'multirate', False))
                 else:
                     return option
             option['attrs']['data-tax-inclusive'] = '1' if ti else '0'
+            option['attrs']['data-multirate'] = '1' if mr else '0'
         except Exception:
             pass
         return option
@@ -1738,15 +1741,16 @@ class SaleTypeAdmin(admin.ModelAdmin):
         "tax_split_percent",
         "affect_stock",
         "tax_inclusive",
+        "multirate",
     )
-    list_filter = ("is_interstate", "affect_stock")
+    list_filter = ("is_interstate", "affect_stock", "multirate")
     search_fields = ("name",)
     autocomplete_fields = ("sales_account", "sales_return_account", "tax_account", "tax_account_2")
     fieldsets = (
         (
             None,
             {
-                "fields": ("name", "is_interstate", "sales_account", "sales_return_account", "affect_stock", "tax_inclusive"),
+                "fields": ("name", "is_interstate", "sales_account", "sales_return_account", "affect_stock", "tax_inclusive", "multirate"),
                 "description": (
                     "Tick 'Is Interstate' for IGST-posting types. Sale/Purchase vouchers use this "
                     "flag (compared against the party's state vs your Company Profile state) to "

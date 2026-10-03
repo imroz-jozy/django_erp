@@ -338,6 +338,20 @@ class SaleType(models.Model):
     )
     affect_stock = models.BooleanField(default=True)
     tax_inclusive = models.BooleanField(default=False)
+    multirate = models.BooleanField(
+        default=False,
+        help_text=(
+            "Multirate billing: a Bill Sundry that is both 'Subtractive' and "
+            "applied on 'Item basic amount' is treated as an overall bill "
+            "discount applied BEFORE GST. It is split proportionally across "
+            "item lines (by each line's share of basic amount) and GST is "
+            "recalculated on the reduced base per line - matches Busy's "
+            "Multirate behaviour. Needed when a bill mixes items taxed at "
+            "different GST rates, since a flat pre-tax discount can't "
+            "otherwise be applied correctly across them. Other Bill Sundries "
+            "(e.g. Freight) still apply after GST as usual, unaffected."
+        ),
+    )
     is_interstate = models.BooleanField(
         default=False,
         help_text=(
@@ -813,24 +827,102 @@ def compute_sundry_amount(sundry, entered_amount, bases, previous_sundry, runnin
     return money(amount)
 
 
-def voucher_totals(item_lines, sundry_lines, tax_inclusive=False):
+def voucher_totals(item_lines, sundry_lines, tax_inclusive=False, multirate=False):
+    """Combine item-line totals with Bill Sundries into final voucher totals.
+
+    When ``multirate`` is True, any Bill Sundry line that is both
+    SUBTRACTIVE and applied on ITEM_BASIC is treated as an overall bill
+    discount that must come off BEFORE GST (Busy's "Multirate" behaviour),
+    rather than being subtracted from the already-taxed running total like
+    every other sundry (Freight, etc.) still is.
+
+    Because item lines can carry different tax rates, a flat pre-tax
+    discount is split proportionally across lines by each line's own share
+    of the (post item-discount, tax-exclusive) basic amount, and tax is
+    recalculated per line on the reduced base. The last line absorbs any
+    rounding remainder so the totals always tie out exactly.
+
+    IMPORTANT: ``sundry_signed_amounts`` in the returned dict must stay the
+    same length and order as the ``sundry_lines`` passed in - callers (see
+    reports.py) zip() it directly against ``voucher.bill_sundries.all()``.
+    A pretax (multirate) sundry's own amount is still included in this list
+    for display/posting purposes; it's simply excluded from the normal
+    running-total accumulation below so its effect isn't counted twice
+    (once via the item-level tax recompute, again via the running total).
+    """
     bases = _item_totals(item_lines, tax_inclusive=tax_inclusive)
+    item_lines = list(item_lines)
+    sundry_lines = list(sundry_lines)
+
+    def is_pretax_discount(sundry_line):
+        bs = sundry_line.bill_sundry
+        return bool(
+            multirate and bs
+            and bs.type == BillSundry.SundryType.SUBTRACTIVE
+            and bs.apply_on == BillSundry.ApplyOn.ITEM_BASIC
+        )
+
+    # ---- Pass 1: compute each pretax sundry's own amount (vs the static
+    # item_basic_amount, same base ALL "Item basic amount" sundries already
+    # use) and total up how much needs to come off before GST.
+    pretax_signed_by_index = {}
+    total_pretax_discount = ZERO  # positive number
+    for idx, sl in enumerate(sundry_lines):
+        if is_pretax_discount(sl):
+            signed = compute_sundry_amount(sl.bill_sundry, sl.amount, bases, ZERO, bases["item_net_amount"])
+            pretax_signed_by_index[idx] = signed
+            if signed < 0:
+                total_pretax_discount += -signed
+
+    # ---- Recompute item basic/tax if there's a pretax discount to spread.
+    if total_pretax_discount > 0 and bases["item_amount"] > 0:
+        total_base = bases["item_amount"]
+        remaining = total_pretax_discount
+        new_item_amount = ZERO
+        new_tax = ZERO
+        n = len(item_lines)
+        for i, line in enumerate(item_lines):
+            la = compute_line_amounts(line, tax_inclusive=tax_inclusive)
+            line_base = la["amount_after_discount"]
+            if i == n - 1:
+                line_share = remaining  # last line absorbs rounding remainder
+            else:
+                ratio = (line_base / total_base) if total_base else ZERO
+                line_share = money(total_pretax_discount * ratio)
+                remaining = money(remaining - line_share)
+            new_line_base = money(line_base - line_share)
+            if new_line_base < 0:
+                new_line_base = ZERO
+            line_tax_pct = money(line.tax or 0)
+            new_line_tax = money(new_line_base * line_tax_pct / Decimal("100"))
+            new_item_amount += new_line_base
+            new_tax += new_line_tax
+
+        bases["item_amount"] = money(new_item_amount)
+        bases["tax_amount"] = money(new_tax)
+        bases["item_net_amount"] = money(new_item_amount + new_tax)
+        bases["multirate_discount_amount"] = total_pretax_discount
+    else:
+        bases["multirate_discount_amount"] = ZERO
+
+    # ---- Pass 2: walk sundry_lines once more, in order, to build the final
+    # per-line signed-amount list and the remaining (post-tax) running total.
+    # Pretax lines reuse the amount from Pass 1 for display/posting but are
+    # excluded from the running-total accumulation (already folded in above).
     running = bases["item_net_amount"]
     previous = ZERO
     sundry_total = ZERO
     computed = []
-    for line in sundry_lines:
-        signed = compute_sundry_amount(
-            line.bill_sundry,
-            line.amount,
-            bases,
-            previous,
-            running,
-        )
+    for idx, sl in enumerate(sundry_lines):
+        if idx in pretax_signed_by_index:
+            computed.append(pretax_signed_by_index[idx])
+            continue
+        signed = compute_sundry_amount(sl.bill_sundry, sl.amount, bases, previous, running)
         computed.append(signed)
         sundry_total += signed
         running = money(running + signed)
         previous = signed
+
     bases["sundry_amount"] = money(sundry_total)
     bases["net_amount"] = money(running)
     bases["sundry_signed_amounts"] = computed
@@ -930,10 +1022,12 @@ class Sale(models.Model):
 
     def totals(self):
         tax_inclusive = bool(self.sale_type_id and self.sale_type.tax_inclusive)
+        multirate = bool(self.sale_type_id and self.sale_type.multirate)
         return voucher_totals(
             list(self.items.all()),
             list(self.bill_sundries.all()),
             tax_inclusive=tax_inclusive,
+            multirate=multirate,
         )
 
     @property

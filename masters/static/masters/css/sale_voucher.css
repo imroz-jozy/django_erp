@@ -527,6 +527,21 @@
   margin-top: 2px;
 }
 
+/* Shown (via JS) next to a Bill Sundry that qualifies as a Multirate
+   pre-tax bill discount - i.e. Subtractive + applied on Item Basic amount,
+   with the selected Sale Type's Multirate flag on. */
+.sundry-multirate-hint {
+  display: inline-block;
+  margin-top: 3px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #b45309;
+  background: var(--busy-accent-gold-bg);
+  border: 1px solid var(--busy-accent-gold);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
 /* Mobile-only sticky total/save bar: hidden unless mobile layout is active */
 .mobile-sticky-bar {
   display: none;

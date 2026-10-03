@@ -79,6 +79,15 @@
             return $opt.data('tax-inclusive') === true || $opt.data('tax-inclusive') === '1' || $opt.data('tax-inclusive') === 1;
         }
 
+        // Check if Sale Type has Multirate billing enabled (mirrors
+        // voucher_totals()'s multirate param in models.py)
+        function isMultirate() {
+            var $select = $('#id_sale_type');
+            if (!$select.length) return false;
+            var $opt = $select.find('option:selected');
+            return $opt.data('multirate') === true || $opt.data('multirate') === '1' || $opt.data('multirate') === 1;
+        }
+
         // Free Quantity Scheme Parser (e.g., "10+2")
         function parseQty(raw) {
             var str = (raw || '').toString().trim();
@@ -129,7 +138,61 @@
             };
         }
 
-        // Calculate row & voucher totals
+        // Reads one sundry row's selected Bill Sundry's type/apply-on/
+        // amount-of/default-value, tagged onto each <option> by admin.py's
+        // BillSundrySelect widget.
+        function readSundryOption($sRow) {
+            var $sundrySelect = $sRow.find('.v-input-sundry, select[name$="-bill_sundry"]');
+            var $opt = $sundrySelect.find('option:selected');
+            return {
+                id: $sundrySelect.val(),
+                type: $opt.attr('data-type') || 'ADDITIVE',
+                amountOf: $opt.attr('data-amount-of') || 'PERCENT',
+                defaultVal: parseFloat($opt.attr('data-default-value')) || 0,
+                applyOn: $opt.attr('data-apply-on') || 'ITEM_BASIC'
+            };
+        }
+
+        // Resolves a sundry's unsigned amount (entered value, or the
+        // default against the right base) and applies its sign. Mirrors
+        // compute_sundry_amount() in models.py. When `writeBack` is true and
+        // the amount field was blank, the computed default is written into
+        // it (same UX as before - the field shows what it will actually post).
+        function resolveSundryAmount(meta, $amtInput, bases, previous, running, writeBack) {
+            var rawVal = $amtInput.val();
+            var entered = parseFloat(rawVal);
+            var amount = 0;
+
+            if (rawVal !== '' && !isNaN(entered)) {
+                amount = Math.abs(entered);
+            } else if (meta.amountOf === 'ABSOLUTE') {
+                amount = meta.defaultVal;
+                if (writeBack) { $amtInput.val(amount.toFixed(2)); }
+            } else {
+                var applyMap = {
+                    'ITEM_BASIC': bases.ITEM_BASIC,
+                    'ITEM_DISCOUNT': bases.ITEM_DISCOUNT,
+                    'ITEM_AMOUNT': bases.ITEM_AMOUNT,
+                    'TAX_AMOUNT': bases.TAX_AMOUNT,
+                    'ITEM_NET': bases.ITEM_NET,
+                    'BILL_AMOUNT': running,
+                    'PREVIOUS_SUNDRY': previous
+                };
+                var base = (applyMap[meta.applyOn] !== undefined) ? applyMap[meta.applyOn] : bases.ITEM_BASIC;
+                amount = round2(base * meta.defaultVal / 100);
+                if (writeBack) { $amtInput.val(amount.toFixed(2)); }
+            }
+
+            return (meta.type === 'SUBTRACTIVE') ? -amount : amount;
+        }
+
+        // A sundry counts as an overall pre-tax bill discount only when the
+        // Sale Type has Multirate on AND the sundry is Subtractive + applied
+        // on Item Basic amount - exactly the signal voucher_totals() uses.
+        function isPretaxDiscount(meta, multirate) {
+            return multirate && meta.type === 'SUBTRACTIVE' && meta.applyOn === 'ITEM_BASIC';
+        }
+
         // Calculate row & voucher totals (exact mirror of backend voucher_totals in models.py)
         function updateCalculations() {
             var totalBasic = 0;
@@ -137,8 +200,12 @@
             var totalTaxable = 0;
             var totalTax = 0;
             var totalItemsNet = 0;
+            var lineBases = []; // { afterDiscBase, taxPct } per item row, for the multirate redistribution pass
 
-            // 1. Loop over item rows
+            // 1. Loop over item rows (always shows each line's own plain
+            // figures - a Multirate discount never changes a line's own
+            // displayed basic/tax/net, only the voucher-level summary below,
+            // exactly matching SaleItem's own properties server side)
             $('.item-form-row:not(.empty-form-row)').each(function() {
                 var $row = $(this);
                 var qtyVal = $row.find('.v-input-qty, input[name$="-quantity"]').val();
@@ -159,9 +226,10 @@
                 totalTaxable += res.afterDiscBase;
                 totalTax += res.taxAmt;
                 totalItemsNet += res.netAmt;
+                lineBases.push({ afterDiscBase: res.afterDiscBase, taxPct: parseFloat(taxVal) || 0 });
             });
 
-            // 2. Loop over Bill Sundries (matches backend compute_sundry_amount)
+            var multirate = isMultirate();
             var bases = {
                 'ITEM_BASIC': totalBasic,
                 'ITEM_DISCOUNT': totalDisc,
@@ -170,49 +238,77 @@
                 'ITEM_NET': totalItemsNet
             };
 
+            var $sundryRows = $('.sundry-form-row:not(.empty-sundry-row)');
+
+            // 2. Pass 1: find Multirate pre-tax discount sundries and total
+            // up how much needs to come off before GST - mirrors
+            // voucher_totals()'s first pass exactly. Uses the ORIGINAL
+            // (pre-redistribution) item bases, same as every "Item basic
+            // amount" sundry already does.
+            var rowInfo = [];
+            var totalPretaxDiscount = 0;
+            $sundryRows.each(function() {
+                var $sRow = $(this);
+                var meta = readSundryOption($sRow);
+                var info = { $row: $sRow, meta: meta, isPretax: false, signed: 0 };
+                if (meta.id && !isNaN(meta.id)) {
+                    info.isPretax = isPretaxDiscount(meta, multirate);
+                    if (info.isPretax) {
+                        var $amtInput = $sRow.find('.v-input-sundry-amt, input[name$="-amount"]');
+                        info.signed = resolveSundryAmount(meta, $amtInput, bases, 0, totalItemsNet, false);
+                        if (info.signed < 0) { totalPretaxDiscount += -info.signed; }
+                    }
+                }
+                $sRow.find('.sundry-multirate-hint').toggle(info.isPretax);
+                rowInfo.push(info);
+            });
+
+            // 3. Recompute item amount/tax/net if there's a pretax discount
+            // to spread - proportionally by each line's share of the (post
+            // item-discount) basic amount, tax recalculated per line on the
+            // reduced base, last line absorbs the rounding remainder.
+            if (multirate && totalPretaxDiscount > 0 && totalTaxable > 0) {
+                var totalBase = totalTaxable;
+                var remaining = totalPretaxDiscount;
+                var newItemAmount = 0;
+                var newTax = 0;
+                lineBases.forEach(function(lb, i) {
+                    var lineShare;
+                    if (i === lineBases.length - 1) {
+                        lineShare = remaining; // last line absorbs rounding remainder
+                    } else {
+                        var ratio = totalBase ? (lb.afterDiscBase / totalBase) : 0;
+                        lineShare = round2(totalPretaxDiscount * ratio);
+                        remaining = round2(remaining - lineShare);
+                    }
+                    var newLineBase = lb.afterDiscBase - lineShare;
+                    if (newLineBase < 0) { newLineBase = 0; }
+                    var newLineTax = round2(newLineBase * (lb.taxPct / 100));
+                    newItemAmount += newLineBase;
+                    newTax += newLineTax;
+                });
+                totalTaxable = round2(newItemAmount);
+                totalTax = round2(newTax);
+                totalItemsNet = round2(newItemAmount + newTax);
+                bases.ITEM_AMOUNT = totalTaxable;
+                bases.TAX_AMOUNT = totalTax;
+                bases.ITEM_NET = totalItemsNet;
+            }
+
+            // 4. Pass 2: walk sundry rows again for the final running total.
+            // Pretax rows are excluded here (already folded into totalTax/
+            // totalItemsNet above) so they aren't counted twice - matching
+            // voucher_totals()'s sundry_amount exactly. Non-pretax rows use
+            // `bases` as it now stands, so e.g. a Freight sundry based on
+            // "Item amount" correctly sees the post-discount figure too.
             var running = totalItemsNet;
             var previous = 0;
             var totalSundry = 0;
-
-            $('.sundry-form-row:not(.empty-sundry-row)').each(function() {
-                var $sRow = $(this);
-                var $sundrySelect = $sRow.find('.v-input-sundry, select[name$="-bill_sundry"]');
-                var sundryId = $sundrySelect.val();
-                if (!sundryId || isNaN(sundryId)) return;
-
-                var $opt = $sundrySelect.find('option:selected');
-                var type = $opt.attr('data-type') || 'ADDITIVE';
-                var amountOf = $opt.attr('data-amount-of') || 'PERCENT';
-                var defaultVal = parseFloat($opt.attr('data-default-value')) || 0;
-                var applyOn = $opt.attr('data-apply-on') || 'ITEM_BASIC';
-
-                var applyMap = {
-                    'ITEM_BASIC': bases.ITEM_BASIC,
-                    'ITEM_DISCOUNT': bases.ITEM_DISCOUNT,
-                    'ITEM_AMOUNT': bases.ITEM_AMOUNT,
-                    'TAX_AMOUNT': bases.TAX_AMOUNT,
-                    'ITEM_NET': bases.ITEM_NET,
-                    'BILL_AMOUNT': running,
-                    'PREVIOUS_SUNDRY': previous
-                };
-                var base = (applyMap[applyOn] !== undefined) ? applyMap[applyOn] : bases.ITEM_BASIC;
-
-                var $amtInput = $sRow.find('.v-input-sundry-amt, input[name$="-amount"]');
-                var rawVal = $amtInput.val();
-                var entered = parseFloat(rawVal);
-                var amount = 0;
-
-                if (rawVal !== '' && !isNaN(entered)) {
-                    amount = Math.abs(entered);
-                } else if (amountOf === 'ABSOLUTE') {
-                    amount = defaultVal;
-                    $amtInput.val(amount.toFixed(2));
-                } else {
-                    amount = round2(base * defaultVal / 100);
-                    $amtInput.val(amount.toFixed(2));
-                }
-
-                var signed = (type === 'SUBTRACTIVE') ? -amount : amount;
+            rowInfo.forEach(function(info) {
+                if (!info.meta.id || isNaN(info.meta.id)) { return; }
+                if (info.isPretax) { return; }
+                var $amtInput = info.$row.find('.v-input-sundry-amt, input[name$="-amount"]');
+                var signed = resolveSundryAmount(info.meta, $amtInput, bases, previous, running, true);
                 totalSundry += signed;
                 running = round2(running + signed);
                 previous = signed;
