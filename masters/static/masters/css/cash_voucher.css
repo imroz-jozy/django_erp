@@ -1,0 +1,76 @@
+/* =========================================================
+   Payment / Receipt / Journal voucher extras.
+   Loaded AFTER sale_voucher.css, which supplies the shared look
+   (top bar, header card, grid, mobile card layout, action bar).
+   Only additions live here; nothing in sale_voucher.css is overridden
+   in a way that affects the Sale-family screens.
+   ========================================================= */
+
+/* Header grids (3 compact fields; narration spans a full row, as in Sale) */
+.voucher-header-grid.cash-grid,
+.voucher-header-grid.journal-grid {
+  grid-template-columns: 130px 150px minmax(220px, 1fr);
+}
+.voucher-header-grid.note-grid {
+  grid-template-columns: 130px 150px minmax(220px, 1fr) minmax(200px, 1fr);
+}
+@media (max-width: 992px) {
+  .voucher-header-grid.cash-grid,
+  .voucher-header-grid.note-grid,
+  .voucher-header-grid.journal-grid {
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  }
+}
+
+/* Compact grids: far fewer columns than the Sale item grid */
+.busy-table.compact-table { min-width: 560px; }
+.busy-table.journal-table { min-width: 760px; }
+
+/* Row currently being edited (desktop grid only; mobile cards override bg) */
+.busy-table tr.item-form-row:focus-within td { background: #fffbeb; }
+
+/* Bottom dock: only the summary card, right-aligned */
+.voucher-bottom-dock.cash-dock { grid-template-columns: 1fr 320px; }
+.balance-note { font-size: 0.85rem; color: #64748b; align-self: center; }
+
+/* Journal balance indicator */
+.balance-status-row { justify-content: center; }
+.balance-badge {
+  display: inline-block;
+  padding: 3px 12px;
+  border-radius: 20px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  background: #e2e8f0;
+  color: #475569;
+}
+.balance-badge.is-balanced { background: var(--busy-accent-green-bg); color: #065f46; }
+.balance-badge.is-unbalanced { background: var(--busy-danger-bg); color: #991b1b; }
+.totals-row.grand-net.is-unbalanced { background: var(--busy-danger-bg); }
+.totals-row.grand-net.is-unbalanced label,
+.totals-row.grand-net.is-unbalanced .val { color: #991b1b; border-bottom-color: var(--busy-danger); }
+.totals-row.grand-net.is-balanced { background: var(--busy-accent-green-bg); }
+.totals-row.grand-net.is-balanced label,
+.totals-row.grand-net.is-balanced .val { color: #065f46; border-bottom-color: var(--busy-accent-green); }
+
+/* Remarks / account inputs fill their cell */
+.busy-table input.v-input-remarks { width: 100%; }
+
+/* Mobile (card layout is provided by sale_voucher.css) */
+.sale-voucher-wrapper.is-mobile-layout .voucher-bottom-dock.cash-dock { grid-template-columns: 1fr; }
+.sale-voucher-wrapper.is-mobile-layout .balance-note { display: none; }
+.sale-voucher-wrapper.is-mobile-layout .voucher-action-bar .btn-action { margin-right: 0 !important; }
+.sale-voucher-wrapper.is-mobile-layout .voucher-line-row td[data-label="Debit (₹)"],
+.sale-voucher-wrapper.is-mobile-layout .voucher-line-row td[data-label="Credit (₹)"] {
+  display: inline-block;
+  width: 49%;
+  vertical-align: top;
+}
+
+/* select2 (Against Invoice) inside the header card */
+.voucher-header-card .select2-container { width: 100% !important; }
+.voucher-header-card .select2-container .select2-selection--single { height: 30px; border: 1px solid var(--busy-border); border-radius: 5px; background: #f8fafc; }
+.voucher-header-card .select2-container--default .select2-selection--single .select2-selection__rendered { line-height: 28px; font-size: 0.85rem; }
+.voucher-header-card .select2-container--default .select2-selection--single .select2-selection__arrow { height: 28px; }
+.voucher-header-card .select2-container--focus .select2-selection--single { border-color: var(--busy-border-focus); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15); }

@@ -418,6 +418,20 @@ class PurchaseType(models.Model):
     )
     affect_stock = models.BooleanField(default=True)
     tax_inclusive = models.BooleanField(default=False)
+    multirate = models.BooleanField(
+        default=False,
+        help_text=(
+            "Multirate billing: a Bill Sundry that is both 'Subtractive' and "
+            "applied on 'Item basic amount' is treated as an overall bill "
+            "discount applied BEFORE GST. It is split proportionally across "
+            "item lines (by each line's share of basic amount) and GST is "
+            "recalculated on the reduced base per line - matches Busy's "
+            "Multirate behaviour. Needed when a bill mixes items taxed at "
+            "different GST rates, since a flat pre-tax discount can't "
+            "otherwise be applied correctly across them. Other Bill Sundries "
+            "(e.g. Freight) still apply after GST as usual, unaffected."
+        ),
+    )
     is_interstate = models.BooleanField(
         default=False,
         help_text=(
@@ -1139,10 +1153,12 @@ class Purchase(models.Model):
 
     def totals(self):
         tax_inclusive = bool(self.purchase_type_id and self.purchase_type.tax_inclusive)
+        multirate = bool(self.purchase_type_id and self.purchase_type.multirate)
         return voucher_totals(
             list(self.items.all()),
             list(self.bill_sundries.all()),
             tax_inclusive=tax_inclusive,
+            multirate=multirate,
         )
 
     @property
@@ -1471,10 +1487,12 @@ class SaleReturn(models.Model):
 
     def totals(self):
         tax_inclusive = bool(self.sale_type_id and self.sale_type.tax_inclusive)
+        multirate = bool(self.sale_type_id and self.sale_type.multirate)
         return voucher_totals(
             list(self.items.all()),
             list(self.bill_sundries.all()),
             tax_inclusive=tax_inclusive,
+            multirate=multirate,
         )
 
     @property
@@ -1589,10 +1607,12 @@ class PurchaseReturn(models.Model):
 
     def totals(self):
         tax_inclusive = bool(self.purchase_type_id and self.purchase_type.tax_inclusive)
+        multirate = bool(self.purchase_type_id and self.purchase_type.multirate)
         return voucher_totals(
             list(self.items.all()),
             list(self.bill_sundries.all()),
             tax_inclusive=tax_inclusive,
+            multirate=multirate,
         )
 
     @property

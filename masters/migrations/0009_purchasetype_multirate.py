@@ -1,0 +1,16 @@
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ('masters', '0008_saletype_multirate'),
+    ]
+
+    operations = [
+        migrations.AddField(
+            model_name='purchasetype',
+            name='multirate',
+            field=models.BooleanField(default=False, help_text="Multirate billing: a Bill Sundry that is both 'Subtractive' and applied on 'Item basic amount' is treated as an overall bill discount applied BEFORE GST. It is split proportionally across item lines (by each line's share of basic amount) and GST is recalculated on the reduced base per line - matches Busy's Multirate behaviour. Needed when a bill mixes items taxed at different GST rates, since a flat pre-tax discount can't otherwise be applied correctly across them. Other Bill Sundries (e.g. Freight) still apply after GST as usual, unaffected."),
+        ),
+    ]

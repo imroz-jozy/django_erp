@@ -774,3 +774,17 @@
   width: auto;
   padding: 10px 20px;
 }
+
+
+/* ---- Purchase / Sale Return / Purchase Return: 6-field header (additive; Sale's 5-field grid untouched) ---- */
+@media (min-width: 993px) {
+  .voucher-header-grid.voucher-header-grid-6 {
+    grid-template-columns: 130px 140px 170px 1fr 180px 1.2fr;
+  }
+}
+.voucher-header-grid-6 input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  margin: 6px 0;
+  align-self: flex-start;
+}

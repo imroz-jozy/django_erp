@@ -1,0 +1,220 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls static admin_modify %}
+
+{# Shared by Payment, Receipt, Credit Note and Debit Note. Same look/behaviour as the Sale Voucher screen. #}
+
+{% block extrahead %}
+{{ block.super }}
+{{ media }}
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+<a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+&rsaquo; <a href="{% url 'admin:app_list' app_label=opts.app_label %}">{{ opts.app_config.verbose_name }}</a>
+&rsaquo; <a href="{% url opts|admin_urlname:'changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+&rsaquo; {% if add %}{% blocktranslate with name=opts.verbose_name %}Add {{ name }}{% endblocktranslate %}{% else %}{{ original }}{% endif %}
+</div>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+  <form {% if has_file_field %}enctype="multipart/form-data" {% endif %}action="{{ form_url }}" method="post" id="voucher_form" novalidate>
+    {% csrf_token %}
+
+    {% if is_popup %}<input type="hidden" name="{{ is_popup_var }}" value="1">{% endif %}
+    {% if to_field %}<input type="hidden" name="{{ to_field_var }}" value="{{ to_field }}">{% endif %}
+
+    {% if errors %}
+      <div style="background:#fee2e2; border:1px solid #f87171; color:#991b1b; border-radius:6px; padding:12px; margin-bottom:12px;">
+        <strong>{% translate 'Please correct the errors below:' %}</strong>
+        {{ adminform.form.non_field_errors }}
+        {% for inline in inline_admin_formsets %}
+          {{ inline.formset.non_form_errors }}
+          {% for iform in inline.formset.forms %}
+            {% if iform.errors %}
+              <div style="margin-top:4px;">Line {{ forloop.counter }}: {{ iform.errors }}</div>
+            {% endif %}
+          {% endfor %}
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {# Management form MUST be inside <form> #}
+    {{ inline_admin_formsets.0.formset.management_form }}
+
+    <!-- Hidden row template (kept in <script type="text/html"> so the browser keeps the <tr>).
+         Must stay structurally identical to the rows rendered below. -->
+    <script type="text/html" id="line-empty-form-template">
+      <tr class="item-form-row voucher-line-row">
+        <td class="row-num-cell">
+          <span class="row-num">#</span>
+          {% for field in inline_admin_formsets.0.formset.empty_form.hidden_fields %}{{ field }}{% endfor %}
+        </td>
+        <td data-label="{% if opts.model_name == 'payment' or opts.model_name == 'creditnote' %}Account (Dr){% else %}Account (Cr){% endif %}">{{ inline_admin_formsets.0.formset.empty_form.account }}</td>
+        <td data-label="Amount (₹)">{{ inline_admin_formsets.0.formset.empty_form.amount }}</td>
+        <td class="row-del-cell">
+          <button type="button" class="btn-remove-row btn-delete-line-row" title="Remove (Ctrl+Del)">&times;</button>
+        </td>
+      </tr>
+    </script>
+
+    <div class="sale-voucher-wrapper auto-responsive" data-voucher-kind="cash">
+
+      <!-- TOP APP BAR -->
+      <div class="voucher-top-bar">
+        <div class="voucher-title-group">
+          <span class="voucher-badge">{% if opts.model_name == 'payment' %}PAYMENT VOUCHER{% elif opts.model_name == 'receipt' %}RECEIPT VOUCHER{% elif opts.model_name == 'creditnote' %}CREDIT NOTE{% else %}DEBIT NOTE{% endif %}</span>
+          <h1 class="voucher-title">{% if add %}{% if opts.model_name == 'payment' %}New Payment{% elif opts.model_name == 'receipt' %}New Receipt{% elif opts.model_name == 'creditnote' %}New Credit Note{% else %}New Debit Note{% endif %}{% else %}Voucher: {{ original }}{% endif %}</h1>
+        </div>
+
+        <div class="view-mode-toggle">
+          <button type="button" class="view-mode-btn active" id="btn-mode-auto" onclick="setVoucherMode('auto')">⚡ Auto</button>
+          <button type="button" class="view-mode-btn" id="btn-mode-desktop" onclick="setVoucherMode('desktop')">💻 Desktop</button>
+          <button type="button" class="view-mode-btn" id="btn-mode-mobile" onclick="setVoucherMode('mobile')">📱 Mobile</button>
+        </div>
+
+        <div class="shortcuts-legend">
+          <span><kbd>F2</kbd> Save</span>
+          <span><kbd>Enter</kbd> Next</span>
+          <span><kbd>Shift</kbd>+<kbd>Enter</kbd> Back</span>
+          <span><kbd>Ctrl</kbd>+<kbd>Del</kbd> Remove line</span>
+        </div>
+      </div>
+
+      <!-- HEADER FIELDS -->
+      <div class="voucher-header-card">
+        <div class="voucher-header-grid {% if adminform.form.through %}cash-grid{% else %}note-grid{% endif %}">
+          <div class="v-field-group">
+            <label for="id_date">Voucher Date *</label>
+            {{ adminform.form.date }}
+            {% if adminform.form.date.errors %}<div class="field-error">{{ adminform.form.date.errors }}</div>{% endif %}
+          </div>
+
+          <div class="v-field-group">
+            <label for="id_voucher_no">Voucher No</label>
+            {{ adminform.form.voucher_no }}
+            {% if adminform.form.voucher_no.errors %}<div class="field-error">{{ adminform.form.voucher_no.errors }}</div>{% endif %}
+          </div>
+
+          {% if adminform.form.account %}
+          <div class="v-field-group">
+            <label for="id_account">{% if opts.model_name == 'creditnote' %}Party / Customer (Credited) *{% else %}Party / Supplier (Debited) *{% endif %}</label>
+            {{ adminform.form.account }}
+            {% if adminform.form.account.errors %}<div class="field-error">{{ adminform.form.account.errors }}</div>{% endif %}
+          </div>
+
+          {% if adminform.form.against_sale %}
+          <div class="v-field-group">
+            <label for="id_against_sale">Against Sale Invoice</label>
+            {{ adminform.form.against_sale }}
+            {% if adminform.form.against_sale.errors %}<div class="field-error">{{ adminform.form.against_sale.errors }}</div>{% endif %}
+          </div>
+          {% endif %}
+          {% if adminform.form.against_purchase %}
+          <div class="v-field-group">
+            <label for="id_against_purchase">Against Purchase Invoice</label>
+            {{ adminform.form.against_purchase }}
+            {% if adminform.form.against_purchase.errors %}<div class="field-error">{{ adminform.form.against_purchase.errors }}</div>{% endif %}
+          </div>
+          {% endif %}
+          {% endif %}
+
+          {% if adminform.form.through %}
+          <div class="v-field-group">
+            <label for="id_through">{% if opts.model_name == 'payment' %}Paid From (Cash / Bank) *{% else %}Received In (Cash / Bank) *{% endif %}</label>
+            {{ adminform.form.through }}
+            {% if adminform.form.through.errors %}<div class="field-error">{{ adminform.form.through.errors }}</div>{% endif %}
+          </div>
+          {% endif %}
+
+          <div class="v-field-group v-field-narration">
+            <label for="id_narration">Narration</label>
+            {{ adminform.form.narration }}
+          </div>
+        </div>
+      </div>
+
+      <div class="voucher-body-container">
+
+        <div class="items-toolbar">
+          <button type="button" class="btn-add-row" id="btn-add-line">
+            ➕ Add Line &nbsp;<kbd>Enter</kbd>
+          </button>
+          <span class="items-toolbar-tip">💡 Tip: on an empty account line press Enter to jump to Save</span>
+        </div>
+
+        <div class="busy-table-wrapper">
+          <table class="busy-table compact-table">
+            <thead>
+              <tr>
+                <th style="width:40px; text-align:center;">#</th>
+                <th style="min-width:260px;">{% if opts.model_name == 'payment' %}Account (Party / Expense) &mdash; Dr{% elif opts.model_name == 'receipt' %}Account (Party / Income) &mdash; Cr{% elif opts.model_name == 'creditnote' %}Reason Ledger (Sales Return, Discount Allowed...) &mdash; Dr{% else %}Reason Ledger (Purchase Return, Discount Received...) &mdash; Cr{% endif %}</th>
+                <th style="width:160px; text-align:right;">Amount (₹)</th>
+                <th style="width:50px; text-align:center;">Del</th>
+              </tr>
+            </thead>
+            <tbody id="voucher-lines-tbody">
+              {% for inline_admin_form in inline_admin_formsets.0 %}
+                {% if inline_admin_form.original or not forloop.last %}
+                  <tr class="item-form-row voucher-line-row">
+                    <td class="row-num-cell">
+                      <span class="row-num">{{ forloop.counter }}</span>
+                      {% for field in inline_admin_form.form.hidden_fields %}{{ field }}{% endfor %}
+                    </td>
+                    <td data-label="{% if opts.model_name == 'payment' or opts.model_name == 'creditnote' %}Account (Dr){% else %}Account (Cr){% endif %}">{{ inline_admin_form.form.account }}</td>
+                    <td data-label="Amount (₹)">{{ inline_admin_form.form.amount }}</td>
+                    <td class="row-del-cell">
+                      {% if inline_admin_form.has_delete_permission and inline_admin_form.original %}
+                        <span style="display:none;">{{ inline_admin_form.deletion_field.field }}</span>
+                      {% endif %}
+                      <button type="button" class="btn-remove-row btn-delete-line-row" title="Remove (Ctrl+Del)">&times;</button>
+                    </td>
+                  </tr>
+                {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <!-- TOTALS -->
+        <div class="voucher-bottom-dock cash-dock">
+          <div></div>
+          <div class="totals-summary-card">
+            <div class="totals-summary-header">VOUCHER SUMMARY</div>
+            <div class="totals-row">
+              <label>No. of Lines</label>
+              <span class="val" id="v-sum-lines">0</span>
+            </div>
+            <div class="totals-row grand-net">
+              <label>TOTAL AMOUNT</label>
+              <span class="val v-sum-total">₹ 0.00</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ACTIONS -->
+        <div class="voucher-action-bar">
+          {% if change and has_delete_permission %}
+            <a href="{% url opts|admin_urlname:'delete' original.pk|admin_urlquote %}" class="btn-action btn-action-danger" style="text-decoration:none; margin-right:auto;">🗑 Delete</a>
+          {% endif %}
+          <button type="submit" name="_save" id="btn-save-main" class="btn-action btn-action-primary">💾 Save Voucher (F2)</button>
+          <button type="submit" name="_addanother" class="btn-action btn-action-secondary">➕ Save &amp; Add Another</button>
+          <button type="submit" name="_continue" class="btn-action btn-action-secondary">✏️ Save &amp; Continue</button>
+          <a href="{% url opts|admin_urlname:'changelist' %}" class="btn-action btn-action-danger" style="text-decoration:none;">❌ Cancel</a>
+        </div>
+      </div>
+
+      <!-- MOBILE sticky total + save -->
+      <div class="mobile-sticky-bar">
+        <div class="mobile-sticky-total">
+          <span class="mobile-sticky-total-label">TOTAL</span>
+          <span class="val v-sum-total">₹ 0.00</span>
+        </div>
+        <button type="submit" name="_save" class="btn-action btn-action-primary">💾 Save</button>
+      </div>
+
+    </div>
+  </form>
+</div>
+{% endblock %}

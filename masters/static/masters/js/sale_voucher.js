@@ -73,7 +73,7 @@
 
         // Check if Sale Type is Tax Inclusive
         function isTaxInclusive() {
-            var $select = $('#id_sale_type');
+            var $select = $('#id_sale_type, #id_purchase_type').first();
             if (!$select.length) return false;
             var $opt = $select.find('option:selected');
             return $opt.data('tax-inclusive') === true || $opt.data('tax-inclusive') === '1' || $opt.data('tax-inclusive') === 1;
@@ -82,7 +82,7 @@
         // Check if Sale Type has Multirate billing enabled (mirrors
         // voucher_totals()'s multirate param in models.py)
         function isMultirate() {
-            var $select = $('#id_sale_type');
+            var $select = $('#id_sale_type, #id_purchase_type').first();
             if (!$select.length) return false;
             var $opt = $select.find('option:selected');
             return $opt.data('multirate') === true || $opt.data('multirate') === '1' || $opt.data('multirate') === 1;
@@ -347,9 +347,11 @@
                             $unitSelect.val(data.main_unit_id);
                         }
 
-                        // 2. Set Rate (Default Sale Price)
-                        if (data.sale_price !== undefined) {
-                            $row.find('.v-input-rate, input[name$="-rate"]').val(parseFloat(data.sale_price).toFixed(2));
+                        // 2. Set Rate (Sale Price by default; Purchase vouchers set
+                        // data-price-field="purchase_price" on the wrapper)
+                        var priceField = $('.sale-voucher-wrapper').attr('data-price-field') || 'sale_price';
+                        if (data[priceField] !== undefined) {
+                            $row.find('.v-input-rate, input[name$="-rate"]').val(parseFloat(data[priceField]).toFixed(2));
                         }
 
                         // 3. Set Tax Rate
@@ -411,7 +413,7 @@
         });
 
         // Listen for value inputs to recalculate instantly
-        $(document).on('input change keyup', '.v-input-qty, .v-input-rate, .v-input-disc, .v-input-tax, .v-input-sundry-amt, #id_sale_type, input[name$="-quantity"], input[name$="-rate"], input[name$="-discount"], input[name$="-tax"]', function() {
+        $(document).on('input change keyup', '.v-input-qty, .v-input-rate, .v-input-disc, .v-input-tax, .v-input-sundry-amt, #id_sale_type, #id_purchase_type, input[name$="-quantity"], input[name$="-rate"], input[name$="-discount"], input[name$="-tax"]', function() {
             updateCalculations();
         });
 

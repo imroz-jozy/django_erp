@@ -1394,22 +1394,73 @@ class SaleBillSundryForm(forms.ModelForm):
         }
 
 
-class PurchaseItemForm(QuantityWithFreeSchemeForm):
+_VOUCHER_LINE_WIDGETS = {
+    "item": forms.Select(attrs={"class": "v-input-item"}),
+    "unit": forms.Select(attrs={"class": "v-input-unit"}),
+    "quantity": forms.TextInput(attrs={"class": "v-input-qty num-input", "placeholder": "10 or 10+2"}),
+    "rate": forms.NumberInput(attrs={"class": "v-input-rate num-input", "step": "0.01"}),
+    "discount": forms.NumberInput(attrs={"class": "v-input-disc num-input", "step": "0.01"}),
+    "tax": forms.NumberInput(attrs={"class": "v-input-tax num-input", "step": "0.01"}),
+}
+
+
+class SavedItemIdMixin:
+    """Same behaviour as SaleItemForm.__init__: mark the saved item id so the
+    frontend never overwrites a saved rate on page load."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance and self.instance.pk:
+            self.fields["item"].widget.attrs["data-saved-item-id"] = str(self.instance.item_id or "")
+
+
+def _sundry_widgets():
+    return {
+        "bill_sundry": BillSundrySelect(model=BillSundry, attrs={"class": "v-input-sundry"}),
+        "amount": forms.NumberInput(attrs={"class": "v-input-sundry-amt num-input", "step": "0.01"}),
+    }
+
+
+class PurchaseItemForm(SavedItemIdMixin, QuantityWithFreeSchemeForm):
     class Meta:
         model = PurchaseItem
         fields = ("item", "unit", "quantity", "rate", "discount", "tax")
+        widgets = _VOUCHER_LINE_WIDGETS
 
 
-class SaleReturnItemForm(QuantityWithFreeSchemeForm):
+class PurchaseBillSundryForm(forms.ModelForm):
+    class Meta:
+        model = PurchaseBillSundry
+        fields = ("bill_sundry", "amount")
+        widgets = _sundry_widgets()
+
+
+class SaleReturnItemForm(SavedItemIdMixin, QuantityWithFreeSchemeForm):
     class Meta:
         model = SaleReturnItem
         fields = ("item", "unit", "quantity", "rate", "discount", "tax")
+        widgets = _VOUCHER_LINE_WIDGETS
 
 
-class PurchaseReturnItemForm(QuantityWithFreeSchemeForm):
+class SaleReturnBillSundryForm(forms.ModelForm):
+    class Meta:
+        model = SaleReturnBillSundry
+        fields = ("bill_sundry", "amount")
+        widgets = _sundry_widgets()
+
+
+class PurchaseReturnItemForm(SavedItemIdMixin, QuantityWithFreeSchemeForm):
     class Meta:
         model = PurchaseReturnItem
         fields = ("item", "unit", "quantity", "rate", "discount", "tax")
+        widgets = _VOUCHER_LINE_WIDGETS
+
+
+class PurchaseReturnBillSundryForm(forms.ModelForm):
+    class Meta:
+        model = PurchaseReturnBillSundry
+        fields = ("bill_sundry", "amount")
+        widgets = _sundry_widgets()
 
 
 class SaleItemInline(admin.TabularInline):
@@ -1442,7 +1493,6 @@ class PurchaseItemInline(admin.TabularInline):
     model = PurchaseItem
     form = PurchaseItemForm
     extra = 1
-    autocomplete_fields = ("item", "unit")
     readonly_fields = ("total_quantity", "basic_amount", "amount_after_discount", "tax_amount", "net_amount")
     fields = (
         "item",
@@ -1461,15 +1511,14 @@ class PurchaseItemInline(admin.TabularInline):
 
 class PurchaseBillSundryInline(admin.TabularInline):
     model = PurchaseBillSundry
+    form = PurchaseBillSundryForm
     extra = 1
-    autocomplete_fields = ("bill_sundry",)
 
 
 class SaleReturnItemInline(admin.TabularInline):
     model = SaleReturnItem
     form = SaleReturnItemForm
     extra = 1
-    autocomplete_fields = ("item", "unit")
     readonly_fields = ("total_quantity", "basic_amount", "amount_after_discount", "tax_amount", "net_amount")
     fields = (
         "item",
@@ -1488,15 +1537,14 @@ class SaleReturnItemInline(admin.TabularInline):
 
 class SaleReturnBillSundryInline(admin.TabularInline):
     model = SaleReturnBillSundry
+    form = SaleReturnBillSundryForm
     extra = 1
-    autocomplete_fields = ("bill_sundry",)
 
 
 class PurchaseReturnItemInline(admin.TabularInline):
     model = PurchaseReturnItem
     form = PurchaseReturnItemForm
     extra = 1
-    autocomplete_fields = ("item", "unit")
     readonly_fields = ("total_quantity", "basic_amount", "amount_after_discount", "tax_amount", "net_amount")
     fields = (
         "item",
@@ -1515,14 +1563,20 @@ class PurchaseReturnItemInline(admin.TabularInline):
 
 class PurchaseReturnBillSundryInline(admin.TabularInline):
     model = PurchaseReturnBillSundry
+    form = PurchaseReturnBillSundryForm
     extra = 1
-    autocomplete_fields = ("bill_sundry",)
 
 
 class JournalLineForm(forms.ModelForm):
     class Meta:
         model = JournalLine
         fields = ("account", "debit", "credit", "remarks")
+        widgets = {
+            "account": forms.Select(attrs={"class": "v-input-account"}),
+            "debit": forms.NumberInput(attrs={"class": "v-input-debit num-input", "step": "0.01", "placeholder": "0.00"}),
+            "credit": forms.NumberInput(attrs={"class": "v-input-credit num-input", "step": "0.01", "placeholder": "0.00"}),
+            "remarks": forms.TextInput(attrs={"class": "v-input-remarks", "placeholder": "Line remarks"}),
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1594,10 +1648,9 @@ class JournalLineFormSet(BaseInlineFormSet):
 
 class JournalLineInline(admin.TabularInline):
     model = JournalLine
-    extra = 8
+    extra = 4
     form = JournalLineForm
     formset = JournalLineFormSet
-    autocomplete_fields = ("account",)
     fields = ("account", "debit", "credit", "remarks")
 
 
@@ -1625,30 +1678,64 @@ class CashVoucherLineFormSet(BaseInlineFormSet):
             raise ValidationError("Enter at least one line.")
 
 
+_CASH_LINE_WIDGETS = {
+    "account": forms.Select(attrs={"class": "v-input-account"}),
+    "amount": forms.NumberInput(attrs={"class": "v-input-amt num-input", "step": "0.01", "placeholder": "0.00"}),
+}
+
+
+class PaymentLineForm(forms.ModelForm):
+    class Meta:
+        model = PaymentLine
+        fields = ("account", "amount")
+        widgets = _CASH_LINE_WIDGETS
+
+
+class ReceiptLineForm(forms.ModelForm):
+    class Meta:
+        model = ReceiptLine
+        fields = ("account", "amount")
+        widgets = _CASH_LINE_WIDGETS
+
+
 class PaymentLineInline(admin.TabularInline):
     model = PaymentLine
-    extra = 3
+    form = PaymentLineForm
+    extra = 1
     min_num = 1
     formset = CashVoucherLineFormSet
-    autocomplete_fields = ("account",)
     fields = ("account", "amount")
 
 
 class ReceiptLineInline(admin.TabularInline):
     model = ReceiptLine
-    extra = 3
+    form = ReceiptLineForm
+    extra = 1
     min_num = 1
     formset = CashVoucherLineFormSet
-    autocomplete_fields = ("account",)
     fields = ("account", "amount")
+
+
+class CreditNoteLineForm(forms.ModelForm):
+    class Meta:
+        model = CreditNoteLine
+        fields = ("account", "amount")
+        widgets = _CASH_LINE_WIDGETS
+
+
+class DebitNoteLineForm(forms.ModelForm):
+    class Meta:
+        model = DebitNoteLine
+        fields = ("account", "amount")
+        widgets = _CASH_LINE_WIDGETS
 
 
 class CreditNoteLineInline(admin.TabularInline):
     model = CreditNoteLine
-    extra = 3
+    form = CreditNoteLineForm
+    extra = 1
     min_num = 1
     formset = CashVoucherLineFormSet
-    autocomplete_fields = ("account",)
     fields = ("account", "amount")
     verbose_name = "Reason line"
     verbose_name_plural = "Reason lines (debited)"
@@ -1656,10 +1743,10 @@ class CreditNoteLineInline(admin.TabularInline):
 
 class DebitNoteLineInline(admin.TabularInline):
     model = DebitNoteLine
-    extra = 3
+    form = DebitNoteLineForm
+    extra = 1
     min_num = 1
     formset = CashVoucherLineFormSet
-    autocomplete_fields = ("account",)
     fields = ("account", "amount")
     verbose_name = "Reason line"
     verbose_name_plural = "Reason lines (credited)"
@@ -1783,8 +1870,9 @@ class PurchaseTypeAdmin(admin.ModelAdmin):
         "tax_split_percent",
         "affect_stock",
         "tax_inclusive",
+        "multirate",
     )
-    list_filter = ("is_interstate", "affect_stock")
+    list_filter = ("is_interstate", "affect_stock", "multirate")
     search_fields = ("name",)
     autocomplete_fields = (
         "purchase_account",
@@ -1804,6 +1892,7 @@ class PurchaseTypeAdmin(admin.ModelAdmin):
                     "purchase_return_account",
                     "affect_stock",
                     "tax_inclusive",
+                    "multirate",
                 ),
                 "description": (
                     "Tick 'Is Interstate' for IGST-posting types. Sale/Purchase vouchers use this "
@@ -2058,13 +2147,24 @@ class SaleAdmin(VoucherAdminMixin, admin.ModelAdmin):
         return obj.net_amount
 
 
+class PurchaseForm(forms.ModelForm):
+    class Meta:
+        model = Purchase
+        fields = "__all__"
+        widgets = {
+            "account": forms.Select(attrs={"class": "v-input-account"}),
+            "narration": forms.TextInput(attrs={"placeholder": "Narration / Remarks...", "class": "v-input-narration"}),
+        }
+
+
 @admin.register(Purchase)
 class PurchaseAdmin(VoucherAdminMixin, admin.ModelAdmin):
+    form = PurchaseForm
+    change_form_template = "admin/masters/purchase/change_form.html"
     change_list_template = "admin/masters/purchase/change_list.html"
     list_display = ("invoice_no", "date", "purchase_type", "account", "is_reverse_charge", "net_amount_list")
     search_fields = ("invoice_no", "account__account_name")
     list_filter = ("date", "purchase_type", "is_reverse_charge")
-    autocomplete_fields = ("account",)
     inlines = [PurchaseItemInline, PurchaseBillSundryInline]
     fieldsets = (
         (
@@ -2091,7 +2191,10 @@ class PurchaseAdmin(VoucherAdminMixin, admin.ModelAdmin):
     )
 
     class Media:
-        js = ("masters/js/voucher_helper.js",)
+        css = {
+            "all": ("masters/css/sale_voucher.css",)
+        }
+        js = ("masters/js/sale_voucher.js",)
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "purchase_type":
@@ -2103,13 +2206,25 @@ class PurchaseAdmin(VoucherAdminMixin, admin.ModelAdmin):
         return obj.net_amount
 
 
+class SaleReturnForm(forms.ModelForm):
+    class Meta:
+        model = SaleReturn
+        fields = "__all__"
+        widgets = {
+            "account": forms.Select(attrs={"class": "v-input-account"}),
+            "narration": forms.TextInput(attrs={"placeholder": "Narration / Remarks...", "class": "v-input-narration"}),
+        }
+
+
 @admin.register(SaleReturn)
 class SaleReturnAdmin(VoucherAdminMixin, admin.ModelAdmin):
+    form = SaleReturnForm
+    change_form_template = "admin/masters/salereturn/change_form.html"
     change_list_template = "admin/masters/salereturn/change_list.html"
     list_display = ("voucher_no", "date", "sale_type", "account", "against_sale", "net_amount_list")
     search_fields = ("voucher_no", "account__account_name", "against_sale__invoice_no")
     list_filter = ("date", "sale_type")
-    autocomplete_fields = ("account", "against_sale")
+    autocomplete_fields = ("against_sale",)
     inlines = [SaleReturnItemInline, SaleReturnBillSundryInline]
     fieldsets = (
         (
@@ -2136,7 +2251,10 @@ class SaleReturnAdmin(VoucherAdminMixin, admin.ModelAdmin):
     )
 
     class Media:
-        js = ("masters/js/voucher_helper.js",)
+        css = {
+            "all": ("masters/css/sale_voucher.css",)
+        }
+        js = ("masters/js/sale_voucher.js",)
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "sale_type":
@@ -2148,13 +2266,25 @@ class SaleReturnAdmin(VoucherAdminMixin, admin.ModelAdmin):
         return obj.net_amount
 
 
+class PurchaseReturnForm(forms.ModelForm):
+    class Meta:
+        model = PurchaseReturn
+        fields = "__all__"
+        widgets = {
+            "account": forms.Select(attrs={"class": "v-input-account"}),
+            "narration": forms.TextInput(attrs={"placeholder": "Narration / Remarks...", "class": "v-input-narration"}),
+        }
+
+
 @admin.register(PurchaseReturn)
 class PurchaseReturnAdmin(VoucherAdminMixin, admin.ModelAdmin):
+    form = PurchaseReturnForm
+    change_form_template = "admin/masters/purchasereturn/change_form.html"
     change_list_template = "admin/masters/purchasereturn/change_list.html"
     list_display = ("voucher_no", "date", "purchase_type", "account", "against_purchase", "net_amount_list")
     search_fields = ("voucher_no", "account__account_name", "against_purchase__invoice_no")
     list_filter = ("date", "purchase_type")
-    autocomplete_fields = ("account", "against_purchase")
+    autocomplete_fields = ("against_purchase",)
     inlines = [PurchaseReturnItemInline, PurchaseReturnBillSundryInline]
     fieldsets = (
         (
@@ -2181,7 +2311,10 @@ class PurchaseReturnAdmin(VoucherAdminMixin, admin.ModelAdmin):
     )
 
     class Media:
-        js = ("masters/js/voucher_helper.js",)
+        css = {
+            "all": ("masters/css/sale_voucher.css",)
+        }
+        js = ("masters/js/sale_voucher.js",)
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         if db_field.name == "purchase_type":
@@ -2200,7 +2333,6 @@ class CashVoucherAdmin(admin.ModelAdmin):
     list_display = ("voucher_no", "date", "parties", "through", "total_amount_list")
     search_fields = ("voucher_no", "lines__account__account_name", "narration")
     list_filter = ("date",)
-    autocomplete_fields = ("through",)
     readonly_fields = ("total_amount",)
     fieldsets = (
         (None, {"fields": ("date", "voucher_no", "through", "narration"), "classes": ("erp-voucher-header",)}),
@@ -2223,14 +2355,86 @@ class CashVoucherAdmin(admin.ModelAdmin):
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 
+class _VoucherHeaderFormMixin:
+    """Shared by Payment / Receipt / Journal header forms: single-line
+    narration box, 'Auto' voucher-no placeholder and today's date on new
+    vouchers (desktop-ERP style)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if "voucher_no" in self.fields:
+            self.fields["voucher_no"].widget.attrs.setdefault("placeholder", "Auto")
+        if not (self.instance and self.instance.pk) and "date" in self.fields:
+            self.fields["date"].initial = date.today
+
+
+class PaymentForm(_VoucherHeaderFormMixin, forms.ModelForm):
+    class Meta:
+        model = Payment
+        fields = "__all__"
+        widgets = {
+            "through": forms.Select(attrs={"class": "v-input-account"}),
+            "narration": forms.TextInput(attrs={"placeholder": "Narration / Remarks...", "class": "v-input-narration"}),
+        }
+
+
+class ReceiptForm(_VoucherHeaderFormMixin, forms.ModelForm):
+    class Meta:
+        model = Receipt
+        fields = "__all__"
+        widgets = {
+            "through": forms.Select(attrs={"class": "v-input-account"}),
+            "narration": forms.TextInput(attrs={"placeholder": "Narration / Remarks...", "class": "v-input-narration"}),
+        }
+
+
+class JournalForm(_VoucherHeaderFormMixin, forms.ModelForm):
+    class Meta:
+        model = Journal
+        fields = "__all__"
+        widgets = {
+            "narration": forms.TextInput(attrs={"placeholder": "Narration / Remarks...", "class": "v-input-narration"}),
+        }
+
+
+class CreditNoteForm(_VoucherHeaderFormMixin, forms.ModelForm):
+    class Meta:
+        model = CreditNote
+        fields = "__all__"
+        widgets = {
+            "account": forms.Select(attrs={"class": "v-input-account"}),
+            "narration": forms.TextInput(attrs={"placeholder": "Narration / Remarks...", "class": "v-input-narration"}),
+        }
+
+
+class DebitNoteForm(_VoucherHeaderFormMixin, forms.ModelForm):
+    class Meta:
+        model = DebitNote
+        fields = "__all__"
+        widgets = {
+            "account": forms.Select(attrs={"class": "v-input-account"}),
+            "narration": forms.TextInput(attrs={"placeholder": "Narration / Remarks...", "class": "v-input-narration"}),
+        }
+
+
+class _CashVoucherFrontendMixin:
+    change_form_template = "admin/masters/cash_voucher/change_form.html"
+
+    class Media:
+        css = {"all": ("masters/css/sale_voucher.css", "masters/css/cash_voucher.css")}
+        js = ("masters/js/cash_voucher.js",)
+
+
 @admin.register(Payment)
-class PaymentAdmin(CashVoucherAdmin):
+class PaymentAdmin(_CashVoucherFrontendMixin, CashVoucherAdmin):
+    form = PaymentForm
     change_list_template = "admin/masters/payment/change_list.html"
     inlines = [PaymentLineInline]
 
 
 @admin.register(Receipt)
-class ReceiptAdmin(CashVoucherAdmin):
+class ReceiptAdmin(_CashVoucherFrontendMixin, CashVoucherAdmin):
+    form = ReceiptForm
     change_list_template = "admin/masters/receipt/change_list.html"
     inlines = [ReceiptLineInline]
 
@@ -2259,9 +2463,10 @@ class PartyNoteAdmin(admin.ModelAdmin):
 
 
 @admin.register(CreditNote)
-class CreditNoteAdmin(PartyNoteAdmin):
+class CreditNoteAdmin(_CashVoucherFrontendMixin, PartyNoteAdmin):
+    form = CreditNoteForm
     change_list_template = "admin/masters/creditnote/change_list.html"
-    autocomplete_fields = ("account", "against_sale")
+    autocomplete_fields = ("against_sale",)
     inlines = [CreditNoteLineInline]
     fieldsets = (
         (
@@ -2273,9 +2478,10 @@ class CreditNoteAdmin(PartyNoteAdmin):
 
 
 @admin.register(DebitNote)
-class DebitNoteAdmin(PartyNoteAdmin):
+class DebitNoteAdmin(_CashVoucherFrontendMixin, PartyNoteAdmin):
+    form = DebitNoteForm
     change_list_template = "admin/masters/debitnote/change_list.html"
-    autocomplete_fields = ("account", "against_purchase")
+    autocomplete_fields = ("against_purchase",)
     inlines = [DebitNoteLineInline]
     fieldsets = (
         (
@@ -2291,6 +2497,8 @@ class DebitNoteAdmin(PartyNoteAdmin):
 
 @admin.register(Journal)
 class JournalAdmin(admin.ModelAdmin):
+    form = JournalForm
+    change_form_template = "admin/masters/journal/change_form.html"
     change_list_template = "admin/masters/journal/change_list.html"
     list_display = (
         "voucher_no",
@@ -2316,7 +2524,8 @@ class JournalAdmin(admin.ModelAdmin):
     )
 
     class Media:
-        js = ("masters/js/journal_helper.js",)
+        css = {"all": ("masters/css/sale_voucher.css", "masters/css/cash_voucher.css")}
+        js = ("masters/js/cash_voucher.js",)
 
     def _totals(self, obj):
         if not obj or not obj.pk:
