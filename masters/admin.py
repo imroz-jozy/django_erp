@@ -516,6 +516,57 @@ def item_detail_view(request, item_id):
         "tax": float(item.tax),
         "sale_price": float(item.sale_price),
         "purchase_price": float(item.purchase_price),
+        # Units that belong to this item (main first, then alternate) so the
+        # voucher's Unit dropdown can offer only these.
+        "units": [
+            {"id": u.id, "name": u.name}
+            for u in (item.main_unit, item.alt_unit)
+            if u is not None
+        ],
+    })
+
+
+def item_history_view(request, item_id):
+    """Read-only helper for the Sale/Purchase voucher screens: item details plus
+    the last 5 sale and last 5 purchase rates of an item, either for one party
+    (?account=<id>) or for all parties. Nothing is written or changed."""
+    item = get_object_or_404(Item, pk=item_id)
+    account_id = request.GET.get("account")
+    account_id = int(account_id) if account_id and account_id.isdigit() else None
+
+    def last_five(model, parent):
+        qs = model.objects.filter(item=item).select_related(parent, parent + "__account", "unit")
+        if account_id:
+            qs = qs.filter(**{parent + "__account_id": account_id})
+        qs = qs.order_by("-" + parent + "__date", "-" + parent + "__id", "-id")[:5]
+        rows = []
+        for line in qs:
+            voucher = getattr(line, parent)
+            rows.append({
+                "date": voucher.date.strftime("%d-%m-%y"),
+                "invoice_no": voucher.invoice_no,
+                "party": voucher.account.account_name,
+                "qty": float(line.quantity),
+                "unit": line.unit.name if line.unit else "",
+                "rate": float(line.rate),
+                "discount": float(line.discount),
+            })
+        return rows
+
+    return JsonResponse({
+        "success": True,
+        "item": {
+            "name": item.item_name,
+            "group": item.item_group,
+            "hsn": item.hsn,
+            "unit": item.main_unit.name if item.main_unit else "",
+            "tax": float(item.tax),
+            "mrp": float(item.mrp),
+            "sale_price": float(item.sale_price),
+            "purchase_price": float(item.purchase_price),
+        },
+        "sales": last_five(SaleItem, "sale"),
+        "purchases": last_five(PurchaseItem, "purchase"),
     })
 
 
@@ -1211,6 +1262,11 @@ if not getattr(admin.site, "_erp_urls_patched", False):
                 "masters/item-detail/<int:item_id>/",
                 admin.site.admin_view(item_detail_view),
                 name="erp_item_detail",
+            ),
+            path(
+                "masters/item-history/<int:item_id>/",
+                admin.site.admin_view(item_history_view),
+                name="erp_item_history",
             ),
             path(
                 "masters/item/template/",

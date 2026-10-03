@@ -1,0 +1,1092 @@
+diff -ruN a/masters/admin.py b/masters/admin.py
+--- a/masters/admin.py	2026-10-03 15:44:29.885599134 +0000
++++ b/masters/admin.py	2026-10-03 15:44:29.907839802 +0000
+@@ -516,6 +516,57 @@
+         "tax": float(item.tax),
+         "sale_price": float(item.sale_price),
+         "purchase_price": float(item.purchase_price),
++        # Units that belong to this item (main first, then alternate) so the
++        # voucher's Unit dropdown can offer only these.
++        "units": [
++            {"id": u.id, "name": u.name}
++            for u in (item.main_unit, item.alt_unit)
++            if u is not None
++        ],
++    })
++
++
++def item_history_view(request, item_id):
++    """Read-only helper for the Sale/Purchase voucher screens: item details plus
++    the last 5 sale and last 5 purchase rates of an item, either for one party
++    (?account=<id>) or for all parties. Nothing is written or changed."""
++    item = get_object_or_404(Item, pk=item_id)
++    account_id = request.GET.get("account")
++    account_id = int(account_id) if account_id and account_id.isdigit() else None
++
++    def last_five(model, parent):
++        qs = model.objects.filter(item=item).select_related(parent, parent + "__account", "unit")
++        if account_id:
++            qs = qs.filter(**{parent + "__account_id": account_id})
++        qs = qs.order_by("-" + parent + "__date", "-" + parent + "__id", "-id")[:5]
++        rows = []
++        for line in qs:
++            voucher = getattr(line, parent)
++            rows.append({
++                "date": voucher.date.strftime("%d-%m-%y"),
++                "invoice_no": voucher.invoice_no,
++                "party": voucher.account.account_name,
++                "qty": float(line.quantity),
++                "unit": line.unit.name if line.unit else "",
++                "rate": float(line.rate),
++                "discount": float(line.discount),
++            })
++        return rows
++
++    return JsonResponse({
++        "success": True,
++        "item": {
++            "name": item.item_name,
++            "group": item.item_group,
++            "hsn": item.hsn,
++            "unit": item.main_unit.name if item.main_unit else "",
++            "tax": float(item.tax),
++            "mrp": float(item.mrp),
++            "sale_price": float(item.sale_price),
++            "purchase_price": float(item.purchase_price),
++        },
++        "sales": last_five(SaleItem, "sale"),
++        "purchases": last_five(PurchaseItem, "purchase"),
+     })
+ 
+ 
+@@ -1213,6 +1264,11 @@
+                 name="erp_item_detail",
+             ),
+             path(
++                "masters/item-history/<int:item_id>/",
++                admin.site.admin_view(item_history_view),
++                name="erp_item_history",
++            ),
++            path(
+                 "masters/item/template/",
+                 admin.site.admin_view(item_template_view),
+                 name="erp_item_template",
+diff -ruN a/masters/static/masters/css/sale_voucher.css b/masters/static/masters/css/sale_voucher.css
+--- a/masters/static/masters/css/sale_voucher.css	2026-10-03 15:44:29.887227241 +0000
++++ b/masters/static/masters/css/sale_voucher.css	2026-10-03 15:44:29.900852656 +0000
+@@ -788,3 +788,225 @@
+   margin: 6px 0;
+   align-self: flex-start;
+ }
++
++
++/* =========================================================
++   Header: tidy field grid + Item Details panel (additive)
++   Used by Sale and Purchase vouchers. Left = header fields
++   with a compact narration, right = item details + last 5
++   sale / purchase rates for the item under the cursor.
++   ========================================================= */
++@media (min-width: 993px) {
++  .voucher-header-card.has-item-panel {
++    display: grid;
++    grid-template-columns: minmax(0, 1fr) minmax(420px, 46%);
++    gap: 14px;
++    align-items: start;
++    padding: 8px 14px;
++  }
++  .voucher-header-card.has-item-panel .voucher-header-grid,
++  .voucher-header-card.has-item-panel .voucher-header-grid.voucher-header-grid-6 {
++    grid-template-columns: repeat(3, minmax(0, 1fr));
++    gap: 8px 10px;
++    align-content: start;
++  }
++}
++
++/* Narration: small, single line, still full width of the field block */
++.voucher-header-card.has-item-panel .v-field-narration {
++  grid-column: 1 / -1;
++}
++.voucher-header-card.has-item-panel .v-field-narration label {
++  font-size: 0.64rem;
++}
++.voucher-header-card.has-item-panel .v-field-narration input,
++.voucher-header-card.has-item-panel .v-field-narration textarea {
++  font-size: 0.74rem;
++  padding: 2px 7px;
++  height: 24px;
++  min-height: 0;
++  color: #475569;
++}
++
++/* Item Details panel */
++.item-info-panel {
++  background: #f8fafc;
++  border: 1px solid var(--busy-border);
++  border-radius: 8px;
++  padding: 6px 10px 8px;
++  min-width: 0;
++  box-sizing: border-box;
++}
++.iip-head {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  gap: 8px;
++  margin-bottom: 4px;
++}
++.iip-title {
++  font-size: 0.86rem;
++  font-weight: 700;
++  color: var(--busy-header-bg);
++  white-space: nowrap;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  min-width: 0;
++}
++.iip-scope {
++  display: inline-flex;
++  flex-shrink: 0;
++  border: 1px solid var(--busy-border);
++  border-radius: 6px;
++  overflow: hidden;
++  background: #fff;
++}
++.iip-scope-btn {
++  border: 0;
++  background: transparent;
++  padding: 2px 9px;
++  font-size: 0.7rem;
++  font-weight: 600;
++  color: #475569;
++  cursor: pointer;
++}
++.iip-scope-btn + .iip-scope-btn { border-left: 1px solid var(--busy-border); }
++.iip-scope-btn.active {
++  background: var(--busy-header-bg);
++  color: #fff;
++}
++.iip-meta {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 4px 6px;
++  margin-bottom: 6px;
++  min-height: 18px;
++}
++.iip-hint {
++  font-size: 0.72rem;
++  color: #94a3b8;
++}
++.iip-chip {
++  font-size: 0.72rem;
++  font-weight: 600;
++  color: #0f172a;
++  background: #fff;
++  border: 1px solid #e2e8f0;
++  border-radius: 10px;
++  padding: 1px 8px;
++  white-space: nowrap;
++}
++.iip-chip em {
++  font-style: normal;
++  font-weight: 500;
++  color: #64748b;
++  margin-right: 4px;
++}
++.iip-tables {
++  display: grid;
++  grid-template-columns: 1fr 1fr;
++  gap: 8px;
++}
++.iip-col { min-width: 0; }
++.iip-col-title {
++  font-size: 0.66rem;
++  font-weight: 700;
++  text-transform: uppercase;
++  letter-spacing: 0.3px;
++  color: #475569;
++  margin-bottom: 2px;
++}
++.iip-table {
++  width: 100%;
++  border-collapse: collapse;
++  table-layout: fixed;
++  font-size: 0.72rem;
++  background: #fff;
++  border: 1px solid #e2e8f0;
++  border-radius: 5px;
++}
++.iip-table th {
++  font-size: 0.62rem;
++  font-weight: 700;
++  text-transform: uppercase;
++  color: #64748b;
++  background: #f1f5f9;
++  padding: 2px 4px;
++  text-align: left;
++}
++.iip-table td {
++  padding: 2px 4px;
++  border-top: 1px solid #f1f5f9;
++  white-space: nowrap;
++  overflow: hidden;
++  text-overflow: ellipsis;
++}
++.iip-table .r { text-align: right; }
++.iip-table .iip-rate { font-weight: 700; color: var(--busy-accent-green); }
++.iip-table .iip-empty { text-align: center; color: #94a3b8; padding: 6px 4px; }
++/* Party column only appears for "All Parties" */
++.iip-party-col { display: none; }
++.item-info-panel.show-party .iip-party-col { display: table-cell; }
++.item-info-panel.show-party .iip-tables { grid-template-columns: 1fr; }
++
++/* Narrow / mobile: panel drops below the fields, tables stack */
++@media (max-width: 992px) {
++  .item-info-panel { margin-top: 8px; }
++}
++@media (max-width: 560px) {
++  .iip-tables { grid-template-columns: 1fr; }
++}
++.sale-voucher-wrapper.is-mobile-layout .item-info-panel { margin-top: 8px; }
++.sale-voucher-wrapper.is-mobile-layout .iip-tables { grid-template-columns: 1fr; }
++.sale-voucher-wrapper.is-mobile-layout .voucher-header-card.has-item-panel { display: block; }
++.sale-voucher-wrapper.is-mobile-layout .voucher-header-card.has-item-panel .voucher-header-grid { grid-template-columns: 1fr; }
++
++
++/* =========================================================
++   Searchable dropdown used by the voucher keyboard layer
++   (voucher_keyboard.js). Opens under any select in a voucher.
++   ========================================================= */
++.kbc-pop {
++  position: fixed;
++  z-index: 100000;
++  background: #ffffff;
++  border: 1px solid var(--busy-border-focus, #2563eb);
++  border-radius: 8px;
++  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.22);
++  overflow: hidden;
++  font-size: 0.85rem;
++}
++.kbc-search {
++  display: block;
++  width: 100%;
++  box-sizing: border-box;
++  border: 0;
++  border-bottom: 1px solid var(--busy-border, #cbd5e1);
++  padding: 7px 10px;
++  font-size: 0.88rem;
++  outline: none;
++  background: #f8fafc;
++}
++.kbc-list {
++  max-height: 260px;
++  overflow-y: auto;
++}
++.kbc-opt {
++  padding: 5px 10px;
++  cursor: pointer;
++  white-space: nowrap;
++  overflow: hidden;
++  text-overflow: ellipsis;
++}
++.kbc-opt.kbc-sel { font-weight: 700; }
++.kbc-opt.kbc-none { color: #94a3b8; font-style: italic; }
++.kbc-opt:hover { background: #eff6ff; }
++.kbc-opt.kbc-hi { background: var(--busy-border-focus, #2563eb); color: #ffffff; }
++.kbc-empty { padding: 10px; color: #94a3b8; text-align: center; }
++.kbc-foot {
++  padding: 3px 10px;
++  font-size: 0.68rem;
++  color: #64748b;
++  background: #f1f5f9;
++  border-top: 1px solid #e2e8f0;
++}
+diff -ruN a/masters/static/masters/js/sale_voucher.js b/masters/static/masters/js/sale_voucher.js
+--- a/masters/static/masters/js/sale_voucher.js	2026-10-03 15:44:29.887943919 +0000
++++ b/masters/static/masters/js/sale_voucher.js	2026-10-03 15:44:29.902637979 +0000
+@@ -431,6 +431,101 @@
+             }
+         });
+ 
++        // ---- Item Details panel: item info + last 5 sale / purchase rates ----
++        // Read-only. Follows the cursor: focusing any cell of an item line (or
++        // choosing an item) loads that item's details. "Current Party" limits
++        // the rate history to the party picked in the header; "All Parties"
++        // shows the latest rates across every party.
++        var infoScope = 'party';
++        var infoItemId = '';
++        var infoReq = null;
++
++        function esc(v) {
++            return String(v === null || v === undefined ? '' : v)
++                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
++        }
++        function num2(v) { return (parseFloat(v) || 0).toFixed(2); }
++        function qtyTxt(r) {
++            var q = parseFloat(r.qty) || 0;
++            return (q % 1 === 0 ? q.toString() : q.toFixed(2)) + (r.unit ? ' ' + esc(r.unit) : '');
++        }
++
++        function renderRateRows(selector, rows) {
++            var showParty = infoScope === 'all';
++            var html = '';
++            if (!rows || !rows.length) {
++                html = '<tr><td colspan="5" class="iip-empty">No records</td></tr>';
++            } else {
++                rows.forEach(function(r) {
++                    html += '<tr><td>' + esc(r.date) + '</td><td>' + esc(r.invoice_no) + '</td>' +
++                        '<td class="iip-party-col" title="' + esc(r.party) + '">' + esc(r.party) + '</td>' +
++                        '<td class="r">' + qtyTxt(r) + '</td><td class="r iip-rate">' + num2(r.rate) + '</td></tr>';
++                });
++            }
++            $(selector).html(html);
++            $('#item-info-panel').toggleClass('show-party', showParty);
++        }
++
++        function renderItemInfo(data) {
++            var it = data.item || {};
++            $('#iip-name').text(it.name || 'Item Details');
++            var bits = [];
++            function chip(label, value) {
++                if (value === '' || value === null || value === undefined) return;
++                bits.push('<span class="iip-chip"><em>' + label + '</em>' + esc(value) + '</span>');
++            }
++            chip('Group', it.group);
++            chip('HSN', it.hsn);
++            chip('Unit', it.unit);
++            chip('Tax', it.tax !== undefined ? num2(it.tax) + '%' : '');
++            chip('MRP', it.mrp ? num2(it.mrp) : '');
++            chip('Std Sale', num2(it.sale_price));
++            chip('Std Purchase', num2(it.purchase_price));
++            $('#iip-meta').html(bits.join(''));
++            renderRateRows('#iip-sales', data.sales);
++            renderRateRows('#iip-purchases', data.purchases);
++        }
++
++        function loadItemInfo(itemId) {
++            if (!itemId || isNaN(itemId) || parseInt(itemId, 10) <= 0) { return; }
++            infoItemId = String(itemId);
++            var adminPrefix = window.location.pathname.split('/masters/')[0];
++            var params = {};
++            var acc = $('#id_account').val();
++            if (infoScope === 'party' && acc) { params.account = acc; }
++            if (infoReq && infoReq.abort) { infoReq.abort(); }
++            infoReq = $.ajax({
++                url: adminPrefix + '/masters/item-history/' + infoItemId + '/',
++                type: 'GET',
++                data: params,
++                dataType: 'json',
++                success: function(data) { if (data && data.success) { renderItemInfo(data); } }
++            });
++        }
++
++        // Cursor moves into any cell of an item line -> show that item
++        $(document).on('focusin', '.item-form-row', function() {
++            var id = $(this).find('.v-input-item, select[name$="-item"]').first().val();
++            if (id && String(id) !== infoItemId) { loadItemInfo(id); }
++        });
++        // Item chosen / changed in the focused line
++        $(document).on('change select2:select', '.v-input-item, select[name$="-item"]', function() {
++            var id = $(this).val();
++            if (id) { loadItemInfo(id); }
++        });
++        // Party changed -> refresh "Current Party" history for the shown item
++        $(document).on('change select2:select', '#id_account', function() {
++            if (infoItemId && infoScope === 'party') { loadItemInfo(infoItemId); }
++        });
++        // Current Party / All Parties toggle
++        $(document).on('click', '.iip-scope-btn', function(e) {
++            e.preventDefault();
++            infoScope = $(this).attr('data-scope') === 'all' ? 'all' : 'party';
++            $('.iip-scope-btn').removeClass('active');
++            $(this).addClass('active');
++            if (infoItemId) { loadItemInfo(infoItemId); }
++        });
++
+         // Global F2 Shortcut for Save
+         $(document).on('keydown', function(e) {
+             if (e.key === 'F2') {
+diff -ruN a/masters/static/masters/js/voucher_keyboard.js b/masters/static/masters/js/voucher_keyboard.js
+--- a/masters/static/masters/js/voucher_keyboard.js	1970-01-01 00:00:00.000000000 +0000
++++ b/masters/static/masters/js/voucher_keyboard.js	2026-10-03 15:44:29.902120500 +0000
+@@ -0,0 +1,539 @@
++/**
++ * Voucher keyboard layer (Sale, Purchase, Sale/Purchase Return, Payment,
++ * Receipt, Credit/Debit Note, Journal).
++ *
++ * Works like desktop ERP software:
++ *   Enter            go to the next field (Shift+Enter = previous)
++ *   dropdown fields  open a search box: type to filter, Up/Down to move,
++ *                    Enter to pick and jump to the next field, Esc to close
++ *   On a closed dropdown: Enter = keep value & move on, or just start typing
++ *   Item line        after picking an item, Unit lists only that item's
++ *                    units (1 unit = skipped automatically)
++ *   Enter on a blank item line ends the items and jumps to Bill Sundries / Save
++ *   Enter on the last field of the last item line adds a new line
++ *
++ * Purely front end. It only talks to the existing item-detail URL.
++ * Sale/Purchase screens (no data-voucher-kind) use the navigation below;
++ * Payment/Receipt/Note/Journal keep their own Enter logic in cash_voucher.js,
++ * this file only adds the searchable dropdowns to them.
++ */
++(function () {
++    'use strict';
++
++    var wrap = document.querySelector('.sale-voucher-wrapper');
++    if (!wrap) { return; }
++
++    var isCashFamily = wrap.hasAttribute('data-voucher-kind');
++    var coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
++
++    var bypass = false;          // true while we replay an Enter for cash_voucher.js
++    var suppressOpen = false;    // true while we put focus back without re-opening the list
++    var lastKeyAt = 0;           // last Enter/Tab keydown time (to tell keyboard focus from mouse focus)
++    var lastDir = 1;
++
++    function jq() { return window.jQuery || (window.django && window.django.jQuery) || null; }
++    function esc(v) {
++        return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;')
++            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
++    }
++    function isVisible(el) {
++        return !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
++    }
++
++    /* =====================================================================
++       1. Searchable dropdown
++       ===================================================================== */
++    function isEnhanced(el) {
++        return !!el && el.tagName === 'SELECT' && !el.multiple && !el.disabled &&
++            wrap.contains(el) && !el.classList.contains('select2-hidden-accessible') &&
++            !el.closest('.item-info-panel') && !el.closest('.view-mode-toggle');
++    }
++
++    function realOptionCount(sel) {
++        var n = 0;
++        for (var i = 0; i < sel.options.length; i++) { if (sel.options[i].value !== '') { n++; } }
++        return n;
++    }
++
++    var pop = null;
++    var st = null;
++
++    function filterOptions(opts, query) {
++        var q = query.trim().toLowerCase();
++        if (!q) { return opts.slice(); }
++        var tokens = q.split(/\s+/);
++        var out = [];
++        opts.forEach(function (o) {
++            if (o.value === '') { return; }
++            var t = o.text.toLowerCase();
++            for (var i = 0; i < tokens.length; i++) { if (t.indexOf(tokens[i]) === -1) { return; } }
++            var rank = 2;
++            if (t.indexOf(tokens[0]) === 0) { rank = 0; }
++            else if ((' ' + t).indexOf(' ' + tokens[0]) !== -1) { rank = 1; }
++            out.push({ o: o, rank: rank });
++        });
++        out.sort(function (a, b) { return a.rank - b.rank || a.o.i - b.o.i; });
++        return out.map(function (x) { return x.o; });
++    }
++
++    function renderPop(initial) {
++        var all = filterOptions(st.opts, st.search.value);
++        var LIMIT = 300;
++        st.filtered = all.slice(0, LIMIT);
++        if (initial) {
++            var cur = st.sel.value, idx = 0;
++            for (var k = 0; k < st.filtered.length; k++) {
++                if (st.filtered[k].value === cur) { idx = k; break; }
++            }
++            st.hi = idx;
++        } else {
++            st.hi = 0;
++        }
++        var html = '';
++        st.filtered.forEach(function (o, i) {
++            var label = o.value === '' ? '\u2014 none \u2014' : esc(o.text);
++            html += '<div class="kbc-opt' + (o.value === st.sel.value ? ' kbc-sel' : '') +
++                (i === st.hi ? ' kbc-hi' : '') + (o.value === '' ? ' kbc-none' : '') +
++                '" data-i="' + i + '" role="option">' + label + '</div>';
++        });
++        if (!st.filtered.length) { html = '<div class="kbc-empty">No match</div>'; }
++        st.list.innerHTML = html;
++        st.foot.textContent = all.length > LIMIT
++            ? (all.length - LIMIT) + ' more \u2014 keep typing to narrow'
++            : '\u2191\u2193 move \u00b7 Enter select \u00b7 Esc close';
++        scrollToHi();
++    }
++
++    function scrollToHi() {
++        var el = st.list.querySelector('.kbc-hi');
++        if (el && el.scrollIntoView) { el.scrollIntoView({ block: 'nearest' }); }
++    }
++
++    function setHi(i) {
++        if (!st.filtered.length) { return; }
++        i = Math.max(0, Math.min(st.filtered.length - 1, i));
++        var old = st.list.querySelector('.kbc-hi');
++        if (old) { old.classList.remove('kbc-hi'); }
++        st.hi = i;
++        var nu = st.list.querySelector('[data-i="' + i + '"]');
++        if (nu) { nu.classList.add('kbc-hi'); }
++        scrollToHi();
++    }
++
++    function positionPop() {
++        if (!pop || !st) { return; }
++        var r = st.sel.getBoundingClientRect();
++        var w = Math.max(r.width, 280);
++        var left = Math.max(4, Math.min(r.left, window.innerWidth - w - 4));
++        pop.style.width = w + 'px';
++        pop.style.left = left + 'px';
++        var below = window.innerHeight - r.bottom;
++        if (below < 300 && r.top > below) {
++            pop.style.top = 'auto';
++            pop.style.bottom = (window.innerHeight - r.top + 2) + 'px';
++        } else {
++            pop.style.bottom = 'auto';
++            pop.style.top = (r.bottom + 2) + 'px';
++        }
++    }
++
++    function closePop(refocus) {
++        if (!pop) { return; }
++        var sel = st && st.sel;
++        if (pop.parentNode) { pop.parentNode.removeChild(pop); }
++        pop = null;
++        st = null;
++        if (refocus && sel) { focusNoOpen(sel); }
++    }
++
++    function focusNoOpen(el) {
++        suppressOpen = true;
++        try { el.focus(); } finally { suppressOpen = false; }
++    }
++
++    function openPop(sel, seed) {
++        closePop(false);
++        var opts = Array.prototype.map.call(sel.options, function (o, i) {
++            return { i: i, value: o.value, text: (o.text || '').trim(), disabled: o.disabled };
++        }).filter(function (o) { return !o.disabled; });
++
++        pop = document.createElement('div');
++        pop.className = 'kbc-pop';
++        pop.innerHTML = '<input type="text" class="kbc-search" autocomplete="off" spellcheck="false" ' +
++            'placeholder="Type to search\u2026"><div class="kbc-list" role="listbox"></div><div class="kbc-foot"></div>';
++        document.body.appendChild(pop);
++        st = {
++            sel: sel, opts: opts, filtered: [], hi: 0,
++            search: pop.querySelector('.kbc-search'),
++            list: pop.querySelector('.kbc-list'),
++            foot: pop.querySelector('.kbc-foot')
++        };
++        st.search.value = seed || '';
++        positionPop();
++        renderPop(!seed);
++
++        st.search.addEventListener('input', function () { renderPop(false); });
++        st.search.addEventListener('keydown', onSearchKey);
++        st.search.addEventListener('blur', function () {
++            setTimeout(function () {
++                if (pop && st && document.activeElement !== st.search) { closePop(false); }
++            }, 0);
++        });
++        st.list.addEventListener('mousedown', function (e) {
++            e.preventDefault();
++            var t = e.target.closest ? e.target.closest('.kbc-opt') : null;
++            if (t) { pick(parseInt(t.getAttribute('data-i'), 10), 1); }
++        });
++        st.search.focus();
++        try { st.search.setSelectionRange(st.search.value.length, st.search.value.length); } catch (e) { /* ignore */ }
++    }
++
++    function onSearchKey(e) {
++        if (!st) { return; }
++        var k = e.key;
++        if (k === 'ArrowDown') { e.preventDefault(); setHi(st.hi + 1); }
++        else if (k === 'ArrowUp') { e.preventDefault(); setHi(st.hi - 1); }
++        else if (k === 'PageDown') { e.preventDefault(); setHi(st.hi + 8); }
++        else if (k === 'PageUp') { e.preventDefault(); setHi(st.hi - 8); }
++        else if (k === 'Enter') { e.preventDefault(); e.stopPropagation(); pick(st.hi, 1); }
++        else if (k === 'Tab') {
++            e.preventDefault();
++            if (st.filtered.length) { pick(st.hi, e.shiftKey ? -1 : 1); }
++            else { var s = st.sel; closePop(false); focusNoOpen(s); moveFrom(s, e.shiftKey ? -1 : 1); }
++        }
++        else if (k === 'Escape') { e.preventDefault(); e.stopPropagation(); closePop(true); }
++    }
++
++    function pick(index, dir) {
++        if (!st) { return; }
++        var o = st.filtered[index];
++        if (!o) { return; }
++        var sel = st.sel;
++        var changed = sel.value !== o.value;
++        closePop(false);
++        if (changed) {
++            sel.value = o.value;
++            sel.dispatchEvent(new Event('change', { bubbles: true }));
++        }
++        focusNoOpen(sel);
++        var after = function () { moveFrom(sel, dir); };
++        if (changed && /-item$/.test(sel.name || '')) {
++            var row = sel.closest('.item-form-row');
++            if (row) { restrictUnits(row, sel.value, false).then(after, after); return; }
++        }
++        after();
++    }
++
++    window.addEventListener('resize', positionPop);
++    document.addEventListener('scroll', function (e) {
++        if (pop && !pop.contains(e.target)) { positionPop(); }
++    }, true);
++    window.addEventListener('pagehide', function () { closePop(false); });
++
++    /* =====================================================================
++       2. Per-item Unit list
++       ===================================================================== */
++    var itemCache = {};
++
++    function itemInfo(id) {
++        if (!itemCache[id]) {
++            var prefix = window.location.pathname.split('/masters/')[0];
++            itemCache[id] = fetch(prefix + '/masters/item-detail/' + id + '/', {
++                credentials: 'same-origin',
++                headers: { 'X-Requested-With': 'XMLHttpRequest' }
++            }).then(function (r) { return r.json(); }).catch(function () {
++                delete itemCache[id];
++                return null;
++            });
++        }
++        return itemCache[id];
++    }
++
++    function rebuildSelect(sel, list, want) {
++        sel.innerHTML = '';
++        list.forEach(function (u) {
++            var o = document.createElement('option');
++            o.value = u.v;
++            o.textContent = u.t;
++            sel.appendChild(o);
++        });
++        var found = false;
++        for (var i = 0; i < sel.options.length; i++) {
++            if (want != null && sel.options[i].value === String(want)) { sel.selectedIndex = i; found = true; break; }
++        }
++        if (!found && sel.options.length) { sel.selectedIndex = 0; }
++    }
++
++    // keepCurrent = true for lines that were already saved: their saved unit
++    // is always kept in the list even if it is no longer one of the item's units.
++    function restrictUnits(row, itemId, keepCurrent) {
++        var sel = row.querySelector('select[name$="-unit"]');
++        if (!sel) { return Promise.resolve(); }
++        if (!sel._kbAll) {
++            sel._kbAll = Array.prototype.map.call(sel.options, function (o) { return { v: o.value, t: o.text }; });
++        }
++        var current = sel.value;
++        if (!itemId || isNaN(itemId)) {
++            rebuildSelect(sel, sel._kbAll, current);
++            return Promise.resolve();
++        }
++        return itemInfo(itemId).then(function (data) {
++            if (!data || !data.success || !data.units || !data.units.length) {
++                rebuildSelect(sel, sel._kbAll, current);
++                return;
++            }
++            var list = data.units.map(function (u) { return { v: String(u.id), t: u.name }; });
++            var want = list[0].v;
++            if (keepCurrent && current) {
++                want = current;
++                var present = list.some(function (u) { return u.v === current; });
++                if (!present) {
++                    var saved = sel._kbAll.filter(function (u) { return u.v === current; })[0];
++                    if (saved) { list.push(saved); }
++                }
++            }
++            rebuildSelect(sel, list, want);
++        });
++    }
++
++    // Item changed any way at all (our list, touch pickers, other scripts)
++    document.addEventListener('change', function (e) {
++        var t = e.target;
++        if (t && t.tagName === 'SELECT' && /-item$/.test(t.name || '')) {
++            var row = t.closest('.item-form-row');
++            if (row) { restrictUnits(row, t.value, false); }
++        }
++    }, true);
++
++    function restrictAllSavedRows() {
++        var rows = wrap.querySelectorAll('.item-form-row');
++        Array.prototype.forEach.call(rows, function (row) {
++            var it = row.querySelector('select[name$="-item"]');
++            if (it && it.value) { restrictUnits(row, it.value, true); }
++        });
++    }
++
++    /* =====================================================================
++       3. Moving between fields
++       ===================================================================== */
++    function jqSelect2Open(select) {
++        var $ = jq();
++        if ($ && select) { try { $(select).select2('open'); } catch (e) { /* ignore */ } }
++    }
++    function select2Source(selection) {
++        var c = selection.closest('.select2-container');
++        return c ? c.previousElementSibling : null;
++    }
++
++    function focusEl(el) {
++        if (!el) { return; }
++        el.focus();
++        var t = (el.type || '').toLowerCase();
++        if (el.tagName === 'INPUT' && (t === 'text' || t === 'number' || t === 'search' || t === 'tel' || t === 'email' || t === 'url' || t === 'date' || t === '')) {
++            try { el.select(); } catch (e) { /* ignore */ }
++        }
++    }
++
++    var FIELD_SEL = [
++        '.voucher-header-card select', '.voucher-header-card input', '.voucher-header-card textarea',
++        '.voucher-header-card .select2-selection',
++        '#busy-items-tbody select', '#busy-items-tbody input',
++        '#busy-sundries-tbody select', '#busy-sundries-tbody input',
++        '.voucher-action-bar button[name="_save"]'
++    ].join(',');
++
++    function saleFields() {
++        return Array.prototype.filter.call(wrap.querySelectorAll(FIELD_SEL), function (e) {
++            if (e.disabled || e.readOnly) { return false; }
++            if (e.classList.contains('select2-hidden-accessible') || e.classList.contains('select2-search__field')) { return false; }
++            if (e.closest('.item-info-panel')) { return false; }
++            var t = (e.type || '').toLowerCase();
++            if (t === 'hidden') { return false; }
++            if (t === 'checkbox' && !e.closest('.voucher-header-card')) { return false; }
++            return isVisible(e);
++        });
++    }
++
++    function visibleRows(selector) {
++        return Array.prototype.filter.call(wrap.querySelectorAll(selector), isVisible);
++    }
++
++    function focusAfterItems() {
++        var list = saleFields();
++        for (var i = 0; i < list.length; i++) {
++            if (list[i].closest('#busy-sundries-tbody') || list[i].matches('button[name="_save"]')) {
++                focusEl(list[i]);
++                return;
++            }
++        }
++    }
++
++    function saleNav(el, dir) {
++        var list = saleFields();
++        var i = list.indexOf(el);
++        if (i < 0) { return; }
++
++        var row = el.closest('#busy-items-tbody .item-form-row');
++        if (dir > 0 && row) {
++            var itemSel = row.querySelector('select[name$="-item"]');
++            var rows = visibleRows('#busy-items-tbody .item-form-row');
++            var blank = !itemSel || !itemSel.value;
++
++            // Enter on a blank item = "no more items"
++            if (el === itemSel && blank) {
++                var isSaved = !!row.querySelector('input[type="checkbox"][name$="-DELETE"]');
++                if (rows.indexOf(row) > 0 && !isSaved) {
++                    var del = row.querySelector('.btn-delete-item-row');
++                    if (del) { del.click(); }
++                }
++                focusAfterItems();
++                return;
++            }
++            // Enter on the last field of the last line adds a new line
++            var rowFields = list.filter(function (f) { return row.contains(f); });
++            var lastCell = rowFields[rowFields.length - 1] === el;
++            if (lastCell && rows[rows.length - 1] === row && !blank) {
++                var add = document.getElementById('btn-add-item-row');
++                if (add) { add.click(); return; }
++            }
++        }
++        var nxt = list[i + dir];
++        if (nxt) {
++            if (nxt.classList && nxt.classList.contains('select2-selection')) {
++                nxt.focus();
++            } else {
++                focusEl(nxt);
++            }
++        }
++    }
++
++    function moveFrom(el, dir) {
++        dir = dir || 1;
++        lastDir = dir;
++        lastKeyAt = Date.now();   // always a keyboard-driven move (also after a slow unit lookup)
++        if (isCashFamily) {
++            // let cash_voucher.js apply its own rules (empty account, journal Dr/Cr, new line...)
++            bypass = true;
++            try {
++                el.dispatchEvent(new KeyboardEvent('keydown', {
++                    key: 'Enter', shiftKey: dir < 0, bubbles: true, cancelable: true
++                }));
++            } finally { bypass = false; }
++            return;
++        }
++        saleNav(el, dir);
++    }
++
++    /* =====================================================================
++       4. Event wiring (capture phase so we run before the older handlers)
++       ===================================================================== */
++    document.addEventListener('keydown', function (e) {
++        if (e.key === 'Enter' || e.key === 'Tab') {
++            lastKeyAt = Date.now();
++            lastDir = e.shiftKey ? -1 : 1;
++        }
++        if (bypass || e.isComposing) { return; }
++        var t = e.target;
++        if (!t || !wrap.contains(t)) { return; }
++
++        // ---- dropdowns (all vouchers) ----
++        if (isEnhanced(t)) {
++            var k = e.key;
++            if (k === 'Enter') {
++                e.preventDefault(); e.stopImmediatePropagation();
++                if (t.value) { moveFrom(t, e.shiftKey ? -1 : 1); }
++                else { openPop(t, ''); }
++                return;
++            }
++            if (k === 'ArrowDown' || k === 'ArrowUp' || k === 'F4' || k === ' ') {
++                e.preventDefault(); e.stopImmediatePropagation();
++                openPop(t, '');
++                return;
++            }
++            if (k.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
++                e.preventDefault(); e.stopImmediatePropagation();
++                openPop(t, k);
++                return;
++            }
++            return;
++        }
++
++        if (isCashFamily || e.key !== 'Enter') { return; }
++
++        // ---- Sale / Purchase / Returns: Enter on non-dropdown fields ----
++        var inForm = t.closest('.voucher-header-card, #busy-items-tbody, #busy-sundries-tbody');
++        if (!inForm) { return; }
++        if (t.classList && t.classList.contains('select2-selection')) {
++            e.preventDefault(); e.stopImmediatePropagation();
++            var src = select2Source(t);
++            if (src && src.value) { saleNav(t, e.shiftKey ? -1 : 1); }
++            else { jqSelect2Open(src); }
++            return;
++        }
++        if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') {
++            e.preventDefault(); e.stopImmediatePropagation();
++            saleNav(t, e.shiftKey ? -1 : 1);
++        }
++    }, true);
++
++    // Mouse: open our search list instead of the browser's plain one
++    document.addEventListener('mousedown', function (e) {
++        if (coarse) { return; }
++        var t = e.target;
++        if (t && t.tagName === 'SELECT' && isEnhanced(t)) {
++            e.preventDefault();
++            focusNoOpen(t);
++            openPop(t, '');
++        }
++    }, true);
++
++    // Keyboard arrival (Enter / Tab from the previous field) opens the list
++    document.addEventListener('focusin', function (e) {
++        if (suppressOpen) { return; }
++        var t = e.target;
++        if (!t || Date.now() - lastKeyAt > 250) { return; }
++
++        if (isEnhanced(t)) {
++            var name = t.name || '';
++            // A unit with a single choice is not worth stopping at
++            if (/-unit$/.test(name) && realOptionCount(t) <= 1) {
++                moveFrom(t, lastDir);
++                return;
++            }
++            if (!t.value || /(^|-)(item|account|bill_sundry)$/.test(name)) { openPop(t, ''); }
++            return;
++        }
++        if (t.classList && t.classList.contains('select2-selection') && !isCashFamily) {
++            var src = select2Source(t);
++            if (src && !src.value) { jqSelect2Open(src); }
++        }
++    });
++
++    // Returns: after choosing in the "Against ... Invoice" search, move on
++    (function bindSelect2Advance() {
++        var $ = jq();
++        if (!$ || isCashFamily) { return; }
++        $(document).on('select2:select', '.voucher-header-card select', function () {
++            var sel = this;
++            setTimeout(function () {
++                var c = sel.nextElementSibling;
++                var selection = c && c.querySelector ? c.querySelector('.select2-selection') : null;
++                if (selection) { saleNav(selection, 1); }
++            }, 0);
++        });
++    })();
++
++    /* =====================================================================
++       5. Start-up
++       ===================================================================== */
++    restrictAllSavedRows();
++
++    // Add (new) voucher on a desktop: start on the date, like the cash vouchers do
++    var narrow = !!(window.matchMedia && window.matchMedia('(max-width: 768px)').matches) || wrap.classList.contains('force-mobile');
++    if (!isCashFamily && !narrow && !coarse) {
++        var hasSaved = !!wrap.querySelector('#busy-items-tbody input[type="checkbox"][name$="-DELETE"]');
++        var hasErrors = !!document.querySelector('.field-error, .errorlist');
++        var dateEl = document.getElementById('id_date');
++        if (!hasSaved && !hasErrors && dateEl && isVisible(dateEl)) { focusEl(dateEl); }
++    }
++})();
+diff -ruN a/masters/templates/admin/masters/cash_voucher/change_form.html b/masters/templates/admin/masters/cash_voucher/change_form.html
+--- a/masters/templates/admin/masters/cash_voucher/change_form.html	2026-10-03 15:44:29.888256972 +0000
++++ b/masters/templates/admin/masters/cash_voucher/change_form.html	2026-10-03 15:44:29.903701839 +0000
+@@ -6,6 +6,7 @@
+ {% block extrahead %}
+ {{ block.super }}
+ {{ media }}
++<script src="{% static 'masters/js/voucher_keyboard.js' %}" defer></script>
+ {% endblock %}
+ 
+ {% block breadcrumbs %}
+diff -ruN a/masters/templates/admin/masters/journal/change_form.html b/masters/templates/admin/masters/journal/change_form.html
+--- a/masters/templates/admin/masters/journal/change_form.html	2026-10-03 15:44:29.888543387 +0000
++++ b/masters/templates/admin/masters/journal/change_form.html	2026-10-03 15:44:29.904460495 +0000
+@@ -4,6 +4,7 @@
+ {% block extrahead %}
+ {{ block.super }}
+ {{ media }}
++<script src="{% static 'masters/js/voucher_keyboard.js' %}" defer></script>
+ {% endblock %}
+ 
+ {% block breadcrumbs %}
+diff -ruN a/masters/templates/admin/masters/purchase/change_form.html b/masters/templates/admin/masters/purchase/change_form.html
+--- a/masters/templates/admin/masters/purchase/change_form.html	2026-10-03 15:44:29.888725316 +0000
++++ b/masters/templates/admin/masters/purchase/change_form.html	2026-10-03 15:44:29.904725823 +0000
+@@ -4,6 +4,7 @@
+ {% block extrahead %}
+ {{ block.super }}
+ {{ media }}
++<script src="{% static 'masters/js/voucher_keyboard.js' %}" defer></script>
+ {% endblock %}
+ 
+ {% block breadcrumbs %}
+@@ -110,7 +111,7 @@
+       </div>
+ 
+       <!-- MASTER HEADER FIELDS CARD -->
+-      <div class="voucher-header-card">
++      <div class="voucher-header-card has-item-panel">
+         <div class="voucher-header-grid voucher-header-grid-6">
+           <div class="v-field-group">
+             <label for="id_date">Voucher Date *</label>
+@@ -142,6 +143,28 @@
+             {{ adminform.form.narration }}
+           </div>
+         </div>
++
++        <!-- ITEM DETAILS PANEL: fills when the cursor is on an item line -->
++        <aside class="item-info-panel" id="item-info-panel">
++          <div class="iip-head">
++            <span class="iip-title" id="iip-name">Item Details</span>
++            <div class="iip-scope" role="group" aria-label="Rate history scope">
++              <button type="button" class="iip-scope-btn active" data-scope="party">Current Party</button>
++              <button type="button" class="iip-scope-btn" data-scope="all">All Parties</button>
++            </div>
++          </div>
++          <div class="iip-meta" id="iip-meta"><span class="iip-hint">Click or move to an item line to see its details and last 5 rates.</span></div>
++          <div class="iip-tables">
++            <div class="iip-col">
++              <div class="iip-col-title">Last 5 Sale Rates</div>
++              <table class="iip-table"><thead><tr><th>Date</th><th>Inv</th><th class="iip-party-col">Party</th><th class="r">Qty</th><th class="r">Rate</th></tr></thead><tbody id="iip-sales"><tr><td colspan="5" class="iip-empty">&mdash;</td></tr></tbody></table>
++            </div>
++            <div class="iip-col">
++              <div class="iip-col-title">Last 5 Purchase Rates</div>
++              <table class="iip-table"><thead><tr><th>Date</th><th>Inv</th><th class="iip-party-col">Party</th><th class="r">Qty</th><th class="r">Rate</th></tr></thead><tbody id="iip-purchases"><tr><td colspan="5" class="iip-empty">&mdash;</td></tr></tbody></table>
++            </div>
++          </div>
++        </aside>
+       </div>
+ 
+       <!-- ========================================================= -->
+diff -ruN a/masters/templates/admin/masters/purchasereturn/change_form.html b/masters/templates/admin/masters/purchasereturn/change_form.html
+--- a/masters/templates/admin/masters/purchasereturn/change_form.html	2026-10-03 15:44:29.888831714 +0000
++++ b/masters/templates/admin/masters/purchasereturn/change_form.html	2026-10-03 15:44:29.904871739 +0000
+@@ -4,6 +4,7 @@
+ {% block extrahead %}
+ {{ block.super }}
+ {{ media }}
++<script src="{% static 'masters/js/voucher_keyboard.js' %}" defer></script>
+ {% endblock %}
+ 
+ {% block breadcrumbs %}
+diff -ruN a/masters/templates/admin/masters/sale/change_form.html b/masters/templates/admin/masters/sale/change_form.html
+--- a/masters/templates/admin/masters/sale/change_form.html	2026-10-03 15:44:29.889256250 +0000
++++ b/masters/templates/admin/masters/sale/change_form.html	2026-10-03 15:44:29.906761010 +0000
+@@ -4,6 +4,7 @@
+ {% block extrahead %}
+ {{ block.super }}
+ {{ media }}
++<script src="{% static 'masters/js/voucher_keyboard.js' %}" defer></script>
+ {% endblock %}
+ 
+ {% block breadcrumbs %}
+@@ -110,7 +111,7 @@
+       </div>
+ 
+       <!-- MASTER HEADER FIELDS CARD -->
+-      <div class="voucher-header-card">
++      <div class="voucher-header-card has-item-panel">
+         <div class="voucher-header-grid">
+           <div class="v-field-group">
+             <label for="id_date">Voucher Date *</label>
+@@ -141,6 +142,28 @@
+             {{ adminform.form.narration }}
+           </div>
+         </div>
++
++        <!-- ITEM DETAILS PANEL: fills when the cursor is on an item line -->
++        <aside class="item-info-panel" id="item-info-panel">
++          <div class="iip-head">
++            <span class="iip-title" id="iip-name">Item Details</span>
++            <div class="iip-scope" role="group" aria-label="Rate history scope">
++              <button type="button" class="iip-scope-btn active" data-scope="party">Current Party</button>
++              <button type="button" class="iip-scope-btn" data-scope="all">All Parties</button>
++            </div>
++          </div>
++          <div class="iip-meta" id="iip-meta"><span class="iip-hint">Click or move to an item line to see its details and last 5 rates.</span></div>
++          <div class="iip-tables">
++            <div class="iip-col">
++              <div class="iip-col-title">Last 5 Sale Rates</div>
++              <table class="iip-table"><thead><tr><th>Date</th><th>Inv</th><th class="iip-party-col">Party</th><th class="r">Qty</th><th class="r">Rate</th></tr></thead><tbody id="iip-sales"><tr><td colspan="5" class="iip-empty">&mdash;</td></tr></tbody></table>
++            </div>
++            <div class="iip-col">
++              <div class="iip-col-title">Last 5 Purchase Rates</div>
++              <table class="iip-table"><thead><tr><th>Date</th><th>Inv</th><th class="iip-party-col">Party</th><th class="r">Qty</th><th class="r">Rate</th></tr></thead><tbody id="iip-purchases"><tr><td colspan="5" class="iip-empty">&mdash;</td></tr></tbody></table>
++            </div>
++          </div>
++        </aside>
+       </div>
+ 
+       <!-- ========================================================= -->
+diff -ruN a/masters/templates/admin/masters/salereturn/change_form.html b/masters/templates/admin/masters/salereturn/change_form.html
+--- a/masters/templates/admin/masters/salereturn/change_form.html	2026-10-03 15:44:29.889401432 +0000
++++ b/masters/templates/admin/masters/salereturn/change_form.html	2026-10-03 15:44:29.906921631 +0000
+@@ -4,6 +4,7 @@
+ {% block extrahead %}
+ {{ block.super }}
+ {{ media }}
++<script src="{% static 'masters/js/voucher_keyboard.js' %}" defer></script>
+ {% endblock %}
+ 
+ {% block breadcrumbs %}

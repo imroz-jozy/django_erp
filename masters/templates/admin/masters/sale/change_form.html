@@ -4,6 +4,7 @@
 {% block extrahead %}
 {{ block.super }}
 {{ media }}
+<script src="{% static 'masters/js/voucher_keyboard.js' %}" defer></script>
 {% endblock %}
 
 {% block breadcrumbs %}
@@ -110,7 +111,7 @@
       </div>
 
       <!-- MASTER HEADER FIELDS CARD -->
-      <div class="voucher-header-card">
+      <div class="voucher-header-card has-item-panel">
         <div class="voucher-header-grid">
           <div class="v-field-group">
             <label for="id_date">Voucher Date *</label>
@@ -141,6 +142,28 @@
             {{ adminform.form.narration }}
           </div>
         </div>
+
+        <!-- ITEM DETAILS PANEL: fills when the cursor is on an item line -->
+        <aside class="item-info-panel" id="item-info-panel">
+          <div class="iip-head">
+            <span class="iip-title" id="iip-name">Item Details</span>
+            <div class="iip-scope" role="group" aria-label="Rate history scope">
+              <button type="button" class="iip-scope-btn active" data-scope="party">Current Party</button>
+              <button type="button" class="iip-scope-btn" data-scope="all">All Parties</button>
+            </div>
+          </div>
+          <div class="iip-meta" id="iip-meta"><span class="iip-hint">Click or move to an item line to see its details and last 5 rates.</span></div>
+          <div class="iip-tables">
+            <div class="iip-col">
+              <div class="iip-col-title">Last 5 Sale Rates</div>
+              <table class="iip-table"><thead><tr><th>Date</th><th>Inv</th><th class="iip-party-col">Party</th><th class="r">Qty</th><th class="r">Rate</th></tr></thead><tbody id="iip-sales"><tr><td colspan="5" class="iip-empty">&mdash;</td></tr></tbody></table>
+            </div>
+            <div class="iip-col">
+              <div class="iip-col-title">Last 5 Purchase Rates</div>
+              <table class="iip-table"><thead><tr><th>Date</th><th>Inv</th><th class="iip-party-col">Party</th><th class="r">Qty</th><th class="r">Rate</th></tr></thead><tbody id="iip-purchases"><tr><td colspan="5" class="iip-empty">&mdash;</td></tr></tbody></table>
+            </div>
+          </div>
+        </aside>
       </div>
 
       <!-- ========================================================= -->

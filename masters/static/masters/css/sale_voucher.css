@@ -788,3 +788,225 @@
   margin: 6px 0;
   align-self: flex-start;
 }
+
+
+/* =========================================================
+   Header: tidy field grid + Item Details panel (additive)
+   Used by Sale and Purchase vouchers. Left = header fields
+   with a compact narration, right = item details + last 5
+   sale / purchase rates for the item under the cursor.
+   ========================================================= */
+@media (min-width: 993px) {
+  .voucher-header-card.has-item-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(420px, 46%);
+    gap: 14px;
+    align-items: start;
+    padding: 8px 14px;
+  }
+  .voucher-header-card.has-item-panel .voucher-header-grid,
+  .voucher-header-card.has-item-panel .voucher-header-grid.voucher-header-grid-6 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px 10px;
+    align-content: start;
+  }
+}
+
+/* Narration: small, single line, still full width of the field block */
+.voucher-header-card.has-item-panel .v-field-narration {
+  grid-column: 1 / -1;
+}
+.voucher-header-card.has-item-panel .v-field-narration label {
+  font-size: 0.64rem;
+}
+.voucher-header-card.has-item-panel .v-field-narration input,
+.voucher-header-card.has-item-panel .v-field-narration textarea {
+  font-size: 0.74rem;
+  padding: 2px 7px;
+  height: 24px;
+  min-height: 0;
+  color: #475569;
+}
+
+/* Item Details panel */
+.item-info-panel {
+  background: #f8fafc;
+  border: 1px solid var(--busy-border);
+  border-radius: 8px;
+  padding: 6px 10px 8px;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.iip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.iip-title {
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--busy-header-bg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.iip-scope {
+  display: inline-flex;
+  flex-shrink: 0;
+  border: 1px solid var(--busy-border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+}
+.iip-scope-btn {
+  border: 0;
+  background: transparent;
+  padding: 2px 9px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #475569;
+  cursor: pointer;
+}
+.iip-scope-btn + .iip-scope-btn { border-left: 1px solid var(--busy-border); }
+.iip-scope-btn.active {
+  background: var(--busy-header-bg);
+  color: #fff;
+}
+.iip-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-bottom: 6px;
+  min-height: 18px;
+}
+.iip-hint {
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+.iip-chip {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #0f172a;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.iip-chip em {
+  font-style: normal;
+  font-weight: 500;
+  color: #64748b;
+  margin-right: 4px;
+}
+.iip-tables {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.iip-col { min-width: 0; }
+.iip-col-title {
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: #475569;
+  margin-bottom: 2px;
+}
+.iip-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 0.72rem;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 5px;
+}
+.iip-table th {
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #64748b;
+  background: #f1f5f9;
+  padding: 2px 4px;
+  text-align: left;
+}
+.iip-table td {
+  padding: 2px 4px;
+  border-top: 1px solid #f1f5f9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.iip-table .r { text-align: right; }
+.iip-table .iip-rate { font-weight: 700; color: var(--busy-accent-green); }
+.iip-table .iip-empty { text-align: center; color: #94a3b8; padding: 6px 4px; }
+/* Party column only appears for "All Parties" */
+.iip-party-col { display: none; }
+.item-info-panel.show-party .iip-party-col { display: table-cell; }
+.item-info-panel.show-party .iip-tables { grid-template-columns: 1fr; }
+
+/* Narrow / mobile: panel drops below the fields, tables stack */
+@media (max-width: 992px) {
+  .item-info-panel { margin-top: 8px; }
+}
+@media (max-width: 560px) {
+  .iip-tables { grid-template-columns: 1fr; }
+}
+.sale-voucher-wrapper.is-mobile-layout .item-info-panel { margin-top: 8px; }
+.sale-voucher-wrapper.is-mobile-layout .iip-tables { grid-template-columns: 1fr; }
+.sale-voucher-wrapper.is-mobile-layout .voucher-header-card.has-item-panel { display: block; }
+.sale-voucher-wrapper.is-mobile-layout .voucher-header-card.has-item-panel .voucher-header-grid { grid-template-columns: 1fr; }
+
+
+/* =========================================================
+   Searchable dropdown used by the voucher keyboard layer
+   (voucher_keyboard.js). Opens under any select in a voucher.
+   ========================================================= */
+.kbc-pop {
+  position: fixed;
+  z-index: 100000;
+  background: #ffffff;
+  border: 1px solid var(--busy-border-focus, #2563eb);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.22);
+  overflow: hidden;
+  font-size: 0.85rem;
+}
+.kbc-search {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  border-bottom: 1px solid var(--busy-border, #cbd5e1);
+  padding: 7px 10px;
+  font-size: 0.88rem;
+  outline: none;
+  background: #f8fafc;
+}
+.kbc-list {
+  max-height: 260px;
+  overflow-y: auto;
+}
+.kbc-opt {
+  padding: 5px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kbc-opt.kbc-sel { font-weight: 700; }
+.kbc-opt.kbc-none { color: #94a3b8; font-style: italic; }
+.kbc-opt:hover { background: #eff6ff; }
+.kbc-opt.kbc-hi { background: var(--busy-border-focus, #2563eb); color: #ffffff; }
+.kbc-empty { padding: 10px; color: #94a3b8; text-align: center; }
+.kbc-foot {
+  padding: 3px 10px;
+  font-size: 0.68rem;
+  color: #64748b;
+  background: #f1f5f9;
+  border-top: 1px solid #e2e8f0;
+}

@@ -431,6 +431,101 @@
             }
         });
 
+        // ---- Item Details panel: item info + last 5 sale / purchase rates ----
+        // Read-only. Follows the cursor: focusing any cell of an item line (or
+        // choosing an item) loads that item's details. "Current Party" limits
+        // the rate history to the party picked in the header; "All Parties"
+        // shows the latest rates across every party.
+        var infoScope = 'party';
+        var infoItemId = '';
+        var infoReq = null;
+
+        function esc(v) {
+            return String(v === null || v === undefined ? '' : v)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+        function num2(v) { return (parseFloat(v) || 0).toFixed(2); }
+        function qtyTxt(r) {
+            var q = parseFloat(r.qty) || 0;
+            return (q % 1 === 0 ? q.toString() : q.toFixed(2)) + (r.unit ? ' ' + esc(r.unit) : '');
+        }
+
+        function renderRateRows(selector, rows) {
+            var showParty = infoScope === 'all';
+            var html = '';
+            if (!rows || !rows.length) {
+                html = '<tr><td colspan="5" class="iip-empty">No records</td></tr>';
+            } else {
+                rows.forEach(function(r) {
+                    html += '<tr><td>' + esc(r.date) + '</td><td>' + esc(r.invoice_no) + '</td>' +
+                        '<td class="iip-party-col" title="' + esc(r.party) + '">' + esc(r.party) + '</td>' +
+                        '<td class="r">' + qtyTxt(r) + '</td><td class="r iip-rate">' + num2(r.rate) + '</td></tr>';
+                });
+            }
+            $(selector).html(html);
+            $('#item-info-panel').toggleClass('show-party', showParty);
+        }
+
+        function renderItemInfo(data) {
+            var it = data.item || {};
+            $('#iip-name').text(it.name || 'Item Details');
+            var bits = [];
+            function chip(label, value) {
+                if (value === '' || value === null || value === undefined) return;
+                bits.push('<span class="iip-chip"><em>' + label + '</em>' + esc(value) + '</span>');
+            }
+            chip('Group', it.group);
+            chip('HSN', it.hsn);
+            chip('Unit', it.unit);
+            chip('Tax', it.tax !== undefined ? num2(it.tax) + '%' : '');
+            chip('MRP', it.mrp ? num2(it.mrp) : '');
+            chip('Std Sale', num2(it.sale_price));
+            chip('Std Purchase', num2(it.purchase_price));
+            $('#iip-meta').html(bits.join(''));
+            renderRateRows('#iip-sales', data.sales);
+            renderRateRows('#iip-purchases', data.purchases);
+        }
+
+        function loadItemInfo(itemId) {
+            if (!itemId || isNaN(itemId) || parseInt(itemId, 10) <= 0) { return; }
+            infoItemId = String(itemId);
+            var adminPrefix = window.location.pathname.split('/masters/')[0];
+            var params = {};
+            var acc = $('#id_account').val();
+            if (infoScope === 'party' && acc) { params.account = acc; }
+            if (infoReq && infoReq.abort) { infoReq.abort(); }
+            infoReq = $.ajax({
+                url: adminPrefix + '/masters/item-history/' + infoItemId + '/',
+                type: 'GET',
+                data: params,
+                dataType: 'json',
+                success: function(data) { if (data && data.success) { renderItemInfo(data); } }
+            });
+        }
+
+        // Cursor moves into any cell of an item line -> show that item
+        $(document).on('focusin', '.item-form-row', function() {
+            var id = $(this).find('.v-input-item, select[name$="-item"]').first().val();
+            if (id && String(id) !== infoItemId) { loadItemInfo(id); }
+        });
+        // Item chosen / changed in the focused line
+        $(document).on('change select2:select', '.v-input-item, select[name$="-item"]', function() {
+            var id = $(this).val();
+            if (id) { loadItemInfo(id); }
+        });
+        // Party changed -> refresh "Current Party" history for the shown item
+        $(document).on('change select2:select', '#id_account', function() {
+            if (infoItemId && infoScope === 'party') { loadItemInfo(infoItemId); }
+        });
+        // Current Party / All Parties toggle
+        $(document).on('click', '.iip-scope-btn', function(e) {
+            e.preventDefault();
+            infoScope = $(this).attr('data-scope') === 'all' ? 'all' : 'party';
+            $('.iip-scope-btn').removeClass('active');
+            $(this).addClass('active');
+            if (infoItemId) { loadItemInfo(infoItemId); }
+        });
+
         // Global F2 Shortcut for Save
         $(document).on('keydown', function(e) {
             if (e.key === 'F2') {
