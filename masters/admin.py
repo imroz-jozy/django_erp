@@ -1706,12 +1706,6 @@ if not getattr(admin.site, "_erp_urls_patched", False):
     admin.site.get_urls = _get_urls
     admin.site._erp_urls_patched = True
 
-    # Clear Django's URL resolver cache so the patched get_urls is picked up
-    # immediately. Without this, uWSGI / production servers can serve a
-    # pre-patch cached resolver and raise NoReverseMatch for our custom URLs.
-    from django.urls import clear_url_caches
-    clear_url_caches()
-
 
 # =========================================================
 # INLINES
