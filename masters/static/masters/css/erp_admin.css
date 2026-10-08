@@ -627,3 +627,79 @@ fieldset.erp-totals-box .field-net_amount .readonly {
   }
   #content { padding-bottom: 90px; }
 }
+
+/* =========================================================
+   Mobile sidebar drawer (phones & small tablets ≤ 767px)
+   ========================================================= */
+@media (max-width: 767px) {
+
+  /* --- Hamburger FAB button --- */
+  #erp-mobile-nav-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    bottom: 80px;
+    left: 16px;
+    z-index: 1100;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: var(--erp-gold, #C4921F);
+    border: none;
+    box-shadow: 0 4px 16px rgba(0,0,0,.45);
+    cursor: pointer;
+    transition: transform .18s ease, background .18s ease;
+  }
+  #erp-mobile-nav-toggle:hover { background: #d9a52a; }
+  #erp-mobile-nav-toggle:active { transform: scale(.93); }
+  #erp-mobile-nav-toggle svg { width: 22px; height: 22px; stroke: #fff; }
+
+  /* --- Backdrop overlay --- */
+  #erp-nav-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 1150;
+    background: rgba(0,0,0,.55);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    transition: opacity .2s ease;
+  }
+  #erp-nav-backdrop.is-open { display: block; }
+
+  /* --- Force Django's sidebar to behave as a slide-in drawer --- */
+  #nav-sidebar.erp-nav {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 270px !important;
+    max-width: 85vw;
+    z-index: 1200;
+    transform: translateX(-100%);
+    transition: transform .22s cubic-bezier(.4,0,.2,1);
+    overflow-y: auto;
+    overflow-x: hidden;
+    /* override Django's display:none on mobile */
+    display: block !important;
+  }
+  #nav-sidebar.erp-nav.erp-mobile-open {
+    transform: translateX(0);
+    box-shadow: 4px 0 24px rgba(0,0,0,.55);
+  }
+
+  /* Hide Django's built-in sidebar toggle on mobile (we use ours) */
+  #toggle-nav-sidebar { display: none !important; }
+
+  /* Keep content full-width — no shift on mobile */
+  #main { margin-left: 0 !important; }
+  .main.shifted #main { margin-left: 0 !important; }
+}
+
+/* Desktop: hide our FAB */
+@media (min-width: 768px) {
+  #erp-mobile-nav-toggle { display: none !important; }
+  #erp-nav-backdrop { display: none !important; }
+}
+

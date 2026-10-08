@@ -1,6 +1,26 @@
 {% load i18n %}
+
+{# ── Mobile: hamburger FAB + backdrop (hidden on desktop via CSS) ── #}
+<button id="erp-mobile-nav-toggle" aria-label="{% translate 'Open navigation' %}" title="Menu">
+  <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="3" y1="6"  x2="21" y2="6"/>
+    <line x1="3" y1="12" x2="21" y2="12"/>
+    <line x1="3" y1="18" x2="21" y2="18"/>
+  </svg>
+</button>
+<div id="erp-nav-backdrop"></div>
+
 <button class="sticky toggle-nav-sidebar" id="toggle-nav-sidebar" aria-label="{% translate 'Toggle navigation' %}"></button>
 <nav class="sticky erp-nav" id="nav-sidebar" aria-label="{% translate 'Sidebar' %}">
+
+  {# Mobile-only close button inside the drawer #}
+  <button id="erp-nav-close" aria-label="{% translate 'Close navigation' %}" title="Close"
+    style="display:none;align-items:center;gap:8px;width:100%;padding:12px 16px 8px;background:none;border:none;color:#8494B0;font-size:13px;cursor:pointer;text-align:left;">
+    <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+      <line x1="3" y1="3" x2="15" y2="15"/><line x1="15" y1="3" x2="3" y2="15"/>
+    </svg>
+    Close menu
+  </button>
 
   <div class="erp-nav-group">
     <a class="erp-nav-link erp-nav-top{% if request.path == '/admin/' %} is-active{% endif %}" href="{% url 'admin:index' %}">
@@ -227,3 +247,66 @@
 
 
 </nav>
+
+<script>
+(function () {
+  var MOBILE_BP = 768;
+  var nav      = document.getElementById('nav-sidebar');
+  var fab      = document.getElementById('erp-mobile-nav-toggle');
+  var backdrop = document.getElementById('erp-nav-backdrop');
+  var closeBtn = document.getElementById('erp-nav-close');
+
+  if (!nav || !fab) return;
+
+  function isMobile() { return window.innerWidth < MOBILE_BP; }
+
+  function openNav() {
+    nav.classList.add('erp-mobile-open');
+    backdrop.classList.add('is-open');
+    fab.setAttribute('aria-label', 'Close navigation');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeNav() {
+    nav.classList.remove('erp-mobile-open');
+    backdrop.classList.remove('is-open');
+    fab.setAttribute('aria-label', 'Open navigation');
+    document.body.style.overflow = '';
+  }
+
+  function syncCloseBtn() {
+    if (closeBtn) closeBtn.style.display = isMobile() ? 'flex' : 'none';
+  }
+
+  fab.addEventListener('click', function () {
+    if (nav.classList.contains('erp-mobile-open')) { closeNav(); } else { openNav(); }
+  });
+
+  if (backdrop) backdrop.addEventListener('click', closeNav);
+  if (closeBtn) closeBtn.addEventListener('click', closeNav);
+
+  /* Auto-close when a nav link is tapped on mobile */
+  nav.querySelectorAll('a.erp-nav-link').forEach(function (link) {
+    link.addEventListener('click', function () {
+      if (isMobile()) closeNav();
+    });
+  });
+
+  /* Escape key closes */
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && nav.classList.contains('erp-mobile-open')) closeNav();
+  });
+
+  /* On resize: clean up if switching to desktop */
+  window.addEventListener('resize', function () {
+    syncCloseBtn();
+    if (!isMobile()) {
+      nav.classList.remove('erp-mobile-open');
+      backdrop.classList.remove('is-open');
+      document.body.style.overflow = '';
+    }
+  });
+
+  syncCloseBtn();
+}());
+</script>
