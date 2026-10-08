@@ -1496,3 +1496,1058 @@ def account_ledger(account, date_from, date_to):
         "closing_balance": abs(closing),
         "closing_dr_cr": "Dr" if closing >= 0 else "Cr",
     }
+
+
+# =========================================================
+# ALL VOUCHERS REGISTER (DAY BOOK)
+# =========================================================
+
+def all_vouchers_register(date_from, date_to, vtype=None, account_id=None, min_amount=None, max_amount=None):
+    """
+    Consolidated Day Book / All Voucher Register across all voucher types.
+    Supports filtering by voucher type, account/party, and amount ranges.
+    """
+    entries = []
+    vtype_clean = vtype.strip().lower() if vtype else None
+
+    # 1. Sales
+    if not vtype_clean or vtype_clean == "sale":
+        qs = Sale.objects.filter(date__gte=date_from, date__lte=date_to).select_related("account", "sale_type")
+        if account_id:
+            qs = qs.filter(account_id=account_id)
+        for s in qs:
+            totals = s.totals()
+            amt = totals["net_amount"]
+            entries.append({
+                "date": s.date,
+                "vtype": "Sale",
+                "voucher_no": s.invoice_no,
+                "account": s.account,
+                "account_name": s.account.account_name if s.account else "",
+                "narration": s.narration or "",
+                "amount": amt,
+                "debit": amt,
+                "credit": ZERO,
+                "voucher_url": _voucher_admin_url(s),
+            })
+
+    # 2. Purchases
+    if not vtype_clean or vtype_clean == "purchase":
+        qs = Purchase.objects.filter(date__gte=date_from, date__lte=date_to).select_related("account", "purchase_type")
+        if account_id:
+            qs = qs.filter(account_id=account_id)
+        for p in qs:
+            totals = p.totals()
+            amt = totals["net_amount"]
+            entries.append({
+                "date": p.date,
+                "vtype": "Purchase",
+                "voucher_no": p.invoice_no,
+                "account": p.account,
+                "account_name": p.account.account_name if p.account else "",
+                "narration": p.narration or "",
+                "amount": amt,
+                "debit": ZERO,
+                "credit": amt,
+                "voucher_url": _voucher_admin_url(p),
+            })
+
+    # 3. Payments
+    if not vtype_clean or vtype_clean == "payment":
+        qs = Payment.objects.filter(date__gte=date_from, date__lte=date_to).select_related("through").prefetch_related("lines__account")
+        if account_id:
+            qs = qs.filter(lines__account_id=account_id) | qs.filter(through_id=account_id)
+            qs = qs.distinct()
+        for p in qs:
+            party_names = ", ".join(line.account.account_name for line in p.lines.all() if line.account)
+            entries.append({
+                "date": p.date,
+                "vtype": "Payment",
+                "voucher_no": p.voucher_no,
+                "account": p.through,
+                "account_name": f"{party_names} (via {p.through.account_name if p.through else ''})" if party_names else (p.through.account_name if p.through else ""),
+                "narration": p.narration or "",
+                "amount": p.total_amount,
+                "debit": p.total_amount,
+                "credit": ZERO,
+                "voucher_url": _voucher_admin_url(p),
+            })
+
+    # 4. Receipts
+    if not vtype_clean or vtype_clean == "receipt":
+        qs = Receipt.objects.filter(date__gte=date_from, date__lte=date_to).select_related("through").prefetch_related("lines__account")
+        if account_id:
+            qs = qs.filter(lines__account_id=account_id) | qs.filter(through_id=account_id)
+            qs = qs.distinct()
+        for r in qs:
+            party_names = ", ".join(line.account.account_name for line in r.lines.all() if line.account)
+            entries.append({
+                "date": r.date,
+                "vtype": "Receipt",
+                "voucher_no": r.voucher_no,
+                "account": r.through,
+                "account_name": f"{party_names} (into {r.through.account_name if r.through else ''})" if party_names else (r.through.account_name if r.through else ""),
+                "narration": r.narration or "",
+                "amount": r.total_amount,
+                "debit": ZERO,
+                "credit": r.total_amount,
+                "voucher_url": _voucher_admin_url(r),
+            })
+
+    # 5. Journals
+    if not vtype_clean or vtype_clean == "journal":
+        qs = Journal.objects.filter(date__gte=date_from, date__lte=date_to).prefetch_related("lines__account")
+        if account_id:
+            qs = qs.filter(lines__account_id=account_id).distinct()
+        for j in qs:
+            lines = list(j.lines.all())
+            party_names = ", ".join(l.account.account_name for l in lines if l.account)
+            tot_dr = money(sum((l.debit for l in lines), ZERO))
+            entries.append({
+                "date": j.date,
+                "vtype": "Journal",
+                "voucher_no": j.voucher_no,
+                "account": None,
+                "account_name": party_names,
+                "narration": j.narration or "",
+                "amount": tot_dr,
+                "debit": tot_dr,
+                "credit": tot_dr,
+                "voucher_url": _voucher_admin_url(j),
+            })
+
+    # 6. Sale Returns
+    if not vtype_clean or vtype_clean in ("salereturn", "sale return"):
+        qs = SaleReturn.objects.filter(date__gte=date_from, date__lte=date_to).select_related("account", "sale_type")
+        if account_id:
+            qs = qs.filter(account_id=account_id)
+        for sr in qs:
+            totals = sr.totals()
+            amt = totals["net_amount"]
+            entries.append({
+                "date": sr.date,
+                "vtype": "Sale Return",
+                "voucher_no": sr.voucher_no,
+                "account": sr.account,
+                "account_name": sr.account.account_name if sr.account else "",
+                "narration": sr.narration or "",
+                "amount": amt,
+                "debit": ZERO,
+                "credit": amt,
+                "voucher_url": _voucher_admin_url(sr),
+            })
+
+    # 7. Purchase Returns
+    if not vtype_clean or vtype_clean in ("purchasereturn", "purchase return"):
+        qs = PurchaseReturn.objects.filter(date__gte=date_from, date__lte=date_to).select_related("account", "purchase_type")
+        if account_id:
+            qs = qs.filter(account_id=account_id)
+        for pr in qs:
+            totals = pr.totals()
+            amt = totals["net_amount"]
+            entries.append({
+                "date": pr.date,
+                "vtype": "Purchase Return",
+                "voucher_no": pr.voucher_no,
+                "account": pr.account,
+                "account_name": pr.account.account_name if pr.account else "",
+                "narration": pr.narration or "",
+                "amount": amt,
+                "debit": amt,
+                "credit": ZERO,
+                "voucher_url": _voucher_admin_url(pr),
+            })
+
+    # 8. Credit Notes
+    if not vtype_clean or vtype_clean in ("creditnote", "credit note"):
+        qs = CreditNote.objects.filter(date__gte=date_from, date__lte=date_to).select_related("account").prefetch_related("lines__account")
+        if account_id:
+            qs = qs.filter(account_id=account_id) | qs.filter(lines__account_id=account_id)
+            qs = qs.distinct()
+        for cn in qs:
+            entries.append({
+                "date": cn.date,
+                "vtype": "Credit Note",
+                "voucher_no": cn.voucher_no,
+                "account": cn.account,
+                "account_name": cn.account.account_name if cn.account else "",
+                "narration": cn.narration or "",
+                "amount": cn.total_amount,
+                "debit": ZERO,
+                "credit": cn.total_amount,
+                "voucher_url": _voucher_admin_url(cn),
+            })
+
+    # 9. Debit Notes
+    if not vtype_clean or vtype_clean in ("debitnote", "debit note"):
+        qs = DebitNote.objects.filter(date__gte=date_from, date__lte=date_to).select_related("account").prefetch_related("lines__account")
+        if account_id:
+            qs = qs.filter(account_id=account_id) | qs.filter(lines__account_id=account_id)
+            qs = qs.distinct()
+        for dn in qs:
+            entries.append({
+                "date": dn.date,
+                "vtype": "Debit Note",
+                "voucher_no": dn.voucher_no,
+                "account": dn.account,
+                "account_name": dn.account.account_name if dn.account else "",
+                "narration": dn.narration or "",
+                "amount": dn.total_amount,
+                "debit": dn.total_amount,
+                "credit": ZERO,
+                "voucher_url": _voucher_admin_url(dn),
+            })
+
+    if min_amount is not None:
+        try:
+            m_val = Decimal(str(min_amount))
+            entries = [e for e in entries if e["amount"] >= m_val]
+        except Exception:
+            pass
+    if max_amount is not None:
+        try:
+            m_val = Decimal(str(max_amount))
+            entries = [e for e in entries if e["amount"] <= m_val]
+        except Exception:
+            pass
+
+    entries.sort(key=lambda e: (e["date"], e["vtype"], str(e["voucher_no"])))
+    total = money(sum((e["amount"] for e in entries), ZERO))
+
+    counts_by_type = defaultdict(int)
+    amounts_by_type = defaultdict(lambda: ZERO)
+    for e in entries:
+        counts_by_type[e["vtype"]] += 1
+        amounts_by_type[e["vtype"]] += e["amount"]
+
+    return {
+        "rows": entries,
+        "total": total,
+        "count": len(entries),
+        "counts_by_type": dict(counts_by_type),
+        "amounts_by_type": {k: money(v) for k, v in amounts_by_type.items()},
+    }
+
+
+# =========================================================
+# STOCK STATUS REPORT
+# =========================================================
+
+def stock_status_report(date_from, date_to, group=None, item_id=None, include_zero=True, stock_filter=None):
+    """
+    Complete Desktop ERP Stock Status report:
+    Opening, Inward (purchases + returns), Outward (sales + returns),
+    Closing Qty and Values, with Item Group and Zero-balance filters.
+    """
+    base = stock_figures(date_from, date_to)
+    all_rows = base["rows"]
+
+    filtered_rows = []
+    groups = set()
+    total_opening_val = ZERO
+    total_inward_val = ZERO
+    total_outward_val = ZERO
+    total_closing_val = ZERO
+
+    pos_count = 0
+    zero_count = 0
+    neg_count = 0
+
+    for r in all_rows:
+        item = r["item"]
+        grp = item.item_group.strip() if item.item_group else "General"
+        groups.add(grp)
+
+        if group and grp.lower() != group.strip().lower():
+            continue
+        if item_id and item.id != int(item_id):
+            continue
+
+        inward_qty = r["purchase_qty"] + r["sale_return_qty"]
+        outward_qty = r["sale_qty"] + r["purchase_return_qty"]
+        inward_val = money(r["purchase_qty"] * r["war"])
+        outward_val = money(r["sale_qty"] * r["war"])
+
+        closing_qty = r["closing_qty"]
+        if closing_qty > 0:
+            status = "In Stock"
+            pos_count += 1
+        elif closing_qty == 0:
+            status = "Zero Stock"
+            zero_count += 1
+        else:
+            status = "Negative Stock"
+            neg_count += 1
+
+        if not include_zero and closing_qty == 0:
+            continue
+
+        if stock_filter == "positive" and closing_qty <= 0:
+            continue
+        elif stock_filter == "zero" and closing_qty != 0:
+            continue
+        elif stock_filter == "negative" and closing_qty >= 0:
+            continue
+
+        row_dict = {
+            **r,
+            "group": grp,
+            "inward_qty": inward_qty,
+            "inward_val": inward_val,
+            "outward_qty": outward_qty,
+            "outward_val": outward_val,
+            "status": status,
+        }
+        filtered_rows.append(row_dict)
+
+        total_opening_val += r["opening_value"]
+        total_inward_val += inward_val
+        total_outward_val += outward_val
+        total_closing_val += r["closing_value"]
+
+    return {
+        "rows": filtered_rows,
+        "groups": sorted(groups),
+        "total_opening_val": money(total_opening_val),
+        "total_inward_val": money(total_inward_val),
+        "total_outward_val": money(total_outward_val),
+        "total_closing_val": money(total_closing_val),
+        "total_items": len(filtered_rows),
+        "pos_count": pos_count,
+        "zero_count": zero_count,
+        "neg_count": neg_count,
+    }
+
+
+# =========================================================
+# ITEM STOCK LEDGER (MOVEMENT REGISTER)
+# =========================================================
+
+def item_stock_ledger(item, date_from, date_to):
+    """
+    Detailed Item Stock Ledger / Movement card:
+    Opening balance before date_from, all inward/outward
+    voucher entries between date_from and date_to, and running balance.
+    """
+    op_qty = money(item.opening_main)
+    op_val = money(item.opening_value)
+
+    prior_pur_qty = ZERO
+    prior_pur_val = ZERO
+    for line in PurchaseItem.objects.filter(item=item, purchase__date__lt=date_from).select_related("purchase", "purchase__purchase_type"):
+        p_ti = bool(line.purchase_id and line.purchase.purchase_type and line.purchase.purchase_type.tax_inclusive)
+        amt = compute_line_amounts(line, tax_inclusive=p_ti)["amount_after_discount"]
+        prior_pur_qty += line.total_quantity
+        prior_pur_val += amt
+
+    prior_sret_qty = ZERO
+    for line in SaleReturnItem.objects.filter(item=item, sale_return__date__lt=date_from):
+        prior_sret_qty += line.total_quantity
+
+    prior_sale_qty = ZERO
+    for line in SaleItem.objects.filter(item=item, sale__date__lt=date_from):
+        prior_sale_qty += line.total_quantity
+
+    prior_pret_qty = ZERO
+    for line in PurchaseReturnItem.objects.filter(item=item, purchase_return__date__lt=date_from):
+        prior_pret_qty += line.total_quantity
+
+    total_qty_in_prior = op_qty + prior_pur_qty
+    total_val_in_prior = op_val + prior_pur_val
+    if total_qty_in_prior > 0:
+        prior_war = money(total_val_in_prior / total_qty_in_prior)
+    elif item.purchase_price:
+        prior_war = money(item.purchase_price)
+    else:
+        prior_war = ZERO
+
+    period_op_qty = (total_qty_in_prior + prior_sret_qty) - (prior_sale_qty + prior_pret_qty)
+    period_op_val = money(period_op_qty * prior_war)
+
+    entries = []
+
+    for line in PurchaseItem.objects.filter(item=item, purchase__date__gte=date_from, purchase__date__lte=date_to).select_related("purchase", "purchase__account", "purchase__purchase_type"):
+        p_ti = bool(line.purchase_id and line.purchase.purchase_type and line.purchase.purchase_type.tax_inclusive)
+        amt = compute_line_amounts(line, tax_inclusive=p_ti)["amount_after_discount"]
+        rate = money(amt / line.total_quantity) if line.total_quantity else line.price
+        entries.append({
+            "date": line.purchase.date,
+            "vtype": "Purchase",
+            "voucher_no": line.purchase.invoice_no,
+            "party": line.purchase.account,
+            "party_name": line.purchase.account.account_name if line.purchase.account else "",
+            "inward_qty": line.total_quantity,
+            "outward_qty": ZERO,
+            "rate": rate,
+            "amount": amt,
+            "voucher_url": _voucher_admin_url(line.purchase),
+        })
+
+    for line in SaleReturnItem.objects.filter(item=item, sale_return__date__gte=date_from, sale_return__date__lte=date_to).select_related("sale_return", "sale_return__account", "sale_return__sale_type"):
+        sr_ti = bool(line.sale_return_id and line.sale_return.sale_type and line.sale_return.sale_type.tax_inclusive)
+        amt = compute_line_amounts(line, tax_inclusive=sr_ti)["amount_after_discount"]
+        rate = money(amt / line.total_quantity) if line.total_quantity else line.price
+        entries.append({
+            "date": line.sale_return.date,
+            "vtype": "Sale Return",
+            "voucher_no": line.sale_return.voucher_no,
+            "party": line.sale_return.account,
+            "party_name": line.sale_return.account.account_name if line.sale_return.account else "",
+            "inward_qty": line.total_quantity,
+            "outward_qty": ZERO,
+            "rate": rate,
+            "amount": amt,
+            "voucher_url": _voucher_admin_url(line.sale_return),
+        })
+
+    for line in SaleItem.objects.filter(item=item, sale__date__gte=date_from, sale__date__lte=date_to).select_related("sale", "sale__account", "sale__sale_type"):
+        s_ti = bool(line.sale_id and line.sale.sale_type and line.sale.sale_type.tax_inclusive)
+        amt = compute_line_amounts(line, tax_inclusive=s_ti)["amount_after_discount"]
+        rate = money(amt / line.total_quantity) if line.total_quantity else line.price
+        entries.append({
+            "date": line.sale.date,
+            "vtype": "Sale",
+            "voucher_no": line.sale.invoice_no,
+            "party": line.sale.account,
+            "party_name": line.sale.account.account_name if line.sale.account else "",
+            "inward_qty": ZERO,
+            "outward_qty": line.total_quantity,
+            "rate": rate,
+            "amount": amt,
+            "voucher_url": _voucher_admin_url(line.sale),
+        })
+
+    for line in PurchaseReturnItem.objects.filter(item=item, purchase_return__date__gte=date_from, purchase_return__date__lte=date_to).select_related("purchase_return", "purchase_return__account", "purchase_return__purchase_type"):
+        pr_ti = bool(line.purchase_return_id and line.purchase_return.purchase_type and line.purchase_return.purchase_type.tax_inclusive)
+        amt = compute_line_amounts(line, tax_inclusive=pr_ti)["amount_after_discount"]
+        rate = money(amt / line.total_quantity) if line.total_quantity else line.price
+        entries.append({
+            "date": line.purchase_return.date,
+            "vtype": "Purchase Return",
+            "voucher_no": line.purchase_return.voucher_no,
+            "party": line.purchase_return.account,
+            "party_name": line.purchase_return.account.account_name if line.purchase_return.account else "",
+            "inward_qty": ZERO,
+            "outward_qty": line.total_quantity,
+            "rate": rate,
+            "amount": amt,
+            "voucher_url": _voucher_admin_url(line.purchase_return),
+        })
+
+    entries.sort(key=lambda e: (e["date"], e["vtype"], str(e["voucher_no"])))
+
+    running_qty = period_op_qty
+    period_in_qty = ZERO
+    period_in_val = ZERO
+    period_out_qty = ZERO
+    period_out_val = ZERO
+
+    rows = []
+    for e in entries:
+        period_in_qty += e["inward_qty"]
+        period_out_qty += e["outward_qty"]
+        if e["inward_qty"] > 0:
+            period_in_val += e["amount"]
+        else:
+            period_out_val += e["amount"]
+
+        running_qty += (e["inward_qty"] - e["outward_qty"])
+        rows.append({
+            **e,
+            "balance_qty": running_qty,
+        })
+
+    return {
+        "item": item,
+        "opening_qty": period_op_qty,
+        "opening_val": period_op_val,
+        "rows": rows,
+        "period_in_qty": period_in_qty,
+        "period_in_val": money(period_in_val),
+        "period_out_qty": period_out_qty,
+        "period_out_val": money(period_out_val),
+        "closing_qty": running_qty,
+    }
+
+
+# =========================================================
+# INVENTORY REGISTERS (ITEM-WISE)
+# =========================================================
+
+def item_sales_register(date_from, date_to, item_id=None, account_id=None, group=None):
+    """Item-wise Sales Register listing every sale item line with rates and taxes."""
+    qs = SaleItem.objects.filter(sale__date__gte=date_from, sale__date__lte=date_to).select_related(
+        "sale", "sale__account", "sale__sale_type", "item", "item__main_unit", "unit"
+    )
+    if item_id:
+        qs = qs.filter(item_id=item_id)
+    if account_id:
+        qs = qs.filter(sale__account_id=account_id)
+    if group:
+        qs = qs.filter(item__item_group__iexact=group.strip())
+
+    rows = []
+    tot_qty = ZERO
+    tot_basic = ZERO
+    tot_tax = ZERO
+    tot_net = ZERO
+
+    for line in qs:
+        sale = line.sale
+        s_ti = bool(sale.sale_type_id and sale.sale_type.tax_inclusive)
+        line_amts = compute_line_amounts(line, tax_inclusive=s_ti)
+
+        tot_qty += line.total_quantity
+        tot_basic += line_amts["amount_after_discount"]
+        tot_tax += line_amts["tax_amount"]
+        tot_net += line_amts["line_total"]
+
+        rows.append({
+            "date": sale.date,
+            "voucher_no": sale.invoice_no,
+            "voucher_url": _voucher_admin_url(sale),
+            "party": sale.account,
+            "party_name": sale.account.account_name if sale.account else "",
+            "item": line.item,
+            "item_name": line.item.item_name if line.item else "",
+            "item_group": line.item.item_group if line.item else "",
+            "qty": line.quantity,
+            "free_qty": line.free_quantity,
+            "total_qty": line.total_quantity,
+            "unit": line.unit.name if line.unit else (line.item.main_unit.name if (line.item and line.item.main_unit) else ""),
+            "price": line.price,
+            "discount_pct": line.discount_percent,
+            "discount_amt": line.discount_amount,
+            "taxable_amount": line_amts["amount_after_discount"],
+            "tax_rate": line.tax_rate,
+            "tax_amount": line_amts["tax_amount"],
+            "net_amount": line_amts["line_total"],
+        })
+
+    rows.sort(key=lambda r: (r["date"], str(r["voucher_no"])))
+    return {
+        "rows": rows,
+        "total_qty": tot_qty,
+        "total_basic": money(tot_basic),
+        "total_tax": money(tot_tax),
+        "total_net": money(tot_net),
+    }
+
+
+def item_purchase_register(date_from, date_to, item_id=None, account_id=None, group=None):
+    """Item-wise Purchase Register listing every purchase item line with rates and taxes."""
+    qs = PurchaseItem.objects.filter(purchase__date__gte=date_from, purchase__date__lte=date_to).select_related(
+        "purchase", "purchase__account", "purchase__purchase_type", "item", "item__main_unit", "unit"
+    )
+    if item_id:
+        qs = qs.filter(item_id=item_id)
+    if account_id:
+        qs = qs.filter(purchase__account_id=account_id)
+    if group:
+        qs = qs.filter(item__item_group__iexact=group.strip())
+
+    rows = []
+    tot_qty = ZERO
+    tot_basic = ZERO
+    tot_tax = ZERO
+    tot_net = ZERO
+
+    for line in qs:
+        purchase = line.purchase
+        p_ti = bool(purchase.purchase_type_id and purchase.purchase_type.tax_inclusive)
+        line_amts = compute_line_amounts(line, tax_inclusive=p_ti)
+
+        tot_qty += line.total_quantity
+        tot_basic += line_amts["amount_after_discount"]
+        tot_tax += line_amts["tax_amount"]
+        tot_net += line_amts["line_total"]
+
+        rows.append({
+            "date": purchase.date,
+            "voucher_no": purchase.invoice_no,
+            "voucher_url": _voucher_admin_url(purchase),
+            "party": purchase.account,
+            "party_name": purchase.account.account_name if purchase.account else "",
+            "item": line.item,
+            "item_name": line.item.item_name if line.item else "",
+            "item_group": line.item.item_group if line.item else "",
+            "qty": line.quantity,
+            "free_qty": line.free_quantity,
+            "total_qty": line.total_quantity,
+            "unit": line.unit.name if line.unit else (line.item.main_unit.name if (line.item and line.item.main_unit) else ""),
+            "price": line.price,
+            "discount_pct": line.discount_percent,
+            "discount_amt": line.discount_amount,
+            "taxable_amount": line_amts["amount_after_discount"],
+            "tax_rate": line.tax_rate,
+            "tax_amount": line_amts["tax_amount"],
+            "net_amount": line_amts["line_total"],
+        })
+
+    rows.sort(key=lambda r: (r["date"], str(r["voucher_no"])))
+    return {
+        "rows": rows,
+        "total_qty": tot_qty,
+        "total_basic": money(tot_basic),
+        "total_tax": money(tot_tax),
+        "total_net": money(tot_net),
+    }
+
+
+def item_sale_return_register(date_from, date_to, item_id=None, account_id=None, group=None):
+    qs = SaleReturnItem.objects.filter(sale_return__date__gte=date_from, sale_return__date__lte=date_to).select_related(
+        "sale_return", "sale_return__account", "sale_return__sale_type", "item", "item__main_unit", "unit"
+    )
+    if item_id:
+        qs = qs.filter(item_id=item_id)
+    if account_id:
+        qs = qs.filter(sale_return__account_id=account_id)
+    if group:
+        qs = qs.filter(item__item_group__iexact=group.strip())
+
+    rows = []
+    tot_qty = ZERO
+    tot_basic = ZERO
+    tot_tax = ZERO
+    tot_net = ZERO
+
+    for line in qs:
+        sr = line.sale_return
+        sr_ti = bool(sr.sale_type_id and sr.sale_type.tax_inclusive)
+        line_amts = compute_line_amounts(line, tax_inclusive=sr_ti)
+
+        tot_qty += line.total_quantity
+        tot_basic += line_amts["amount_after_discount"]
+        tot_tax += line_amts["tax_amount"]
+        tot_net += line_amts["line_total"]
+
+        rows.append({
+            "date": sr.date,
+            "voucher_no": sr.voucher_no,
+            "voucher_url": _voucher_admin_url(sr),
+            "party": sr.account,
+            "party_name": sr.account.account_name if sr.account else "",
+            "item": line.item,
+            "item_name": line.item.item_name if line.item else "",
+            "item_group": line.item.item_group if line.item else "",
+            "qty": line.quantity,
+            "free_qty": line.free_quantity,
+            "total_qty": line.total_quantity,
+            "unit": line.unit.name if line.unit else (line.item.main_unit.name if (line.item and line.item.main_unit) else ""),
+            "price": line.price,
+            "taxable_amount": line_amts["amount_after_discount"],
+            "tax_amount": line_amts["tax_amount"],
+            "net_amount": line_amts["line_total"],
+        })
+
+    rows.sort(key=lambda r: (r["date"], str(r["voucher_no"])))
+    return {
+        "rows": rows,
+        "total_qty": tot_qty,
+        "total_basic": money(tot_basic),
+        "total_tax": money(tot_tax),
+        "total_net": money(tot_net),
+    }
+
+
+def item_purchase_return_register(date_from, date_to, item_id=None, account_id=None, group=None):
+    qs = PurchaseReturnItem.objects.filter(purchase_return__date__gte=date_from, purchase_return__date__lte=date_to).select_related(
+        "purchase_return", "purchase_return__account", "purchase_return__purchase_type", "item", "item__main_unit", "unit"
+    )
+    if item_id:
+        qs = qs.filter(item_id=item_id)
+    if account_id:
+        qs = qs.filter(purchase_return__account_id=account_id)
+    if group:
+        qs = qs.filter(item__item_group__iexact=group.strip())
+
+    rows = []
+    tot_qty = ZERO
+    tot_basic = ZERO
+    tot_tax = ZERO
+    tot_net = ZERO
+
+    for line in qs:
+        pr = line.purchase_return
+        pr_ti = bool(pr.purchase_type_id and pr.purchase_type.tax_inclusive)
+        line_amts = compute_line_amounts(line, tax_inclusive=pr_ti)
+
+        tot_qty += line.total_quantity
+        tot_basic += line_amts["amount_after_discount"]
+        tot_tax += line_amts["tax_amount"]
+        tot_net += line_amts["line_total"]
+
+        rows.append({
+            "date": pr.date,
+            "voucher_no": pr.voucher_no,
+            "voucher_url": _voucher_admin_url(pr),
+            "party": pr.account,
+            "party_name": pr.account.account_name if pr.account else "",
+            "item": line.item,
+            "item_name": line.item.item_name if line.item else "",
+            "item_group": line.item.item_group if line.item else "",
+            "qty": line.quantity,
+            "free_qty": line.free_quantity,
+            "total_qty": line.total_quantity,
+            "unit": line.unit.name if line.unit else (line.item.main_unit.name if (line.item and line.item.main_unit) else ""),
+            "price": line.price,
+            "taxable_amount": line_amts["amount_after_discount"],
+            "tax_amount": line_amts["tax_amount"],
+            "net_amount": line_amts["line_total"],
+        })
+
+    rows.sort(key=lambda r: (r["date"], str(r["voucher_no"])))
+    return {
+        "rows": rows,
+        "total_qty": tot_qty,
+        "total_basic": money(tot_basic),
+        "total_tax": money(tot_tax),
+        "total_net": money(tot_net),
+    }
+
+
+# =========================================================
+# SALE ANALYSIS
+# =========================================================
+
+def sales_analysis(date_from, date_to, item_id=None, account_id=None, group=None):
+    """
+    Comprehensive Sales Analysis:
+    - Item-wise Sales Analysis
+    - Customer-wise Sales Analysis
+    - Group-wise Sales Analysis
+    - Monthly Sales Trend
+    """
+    qs = SaleItem.objects.filter(sale__date__gte=date_from, sale__date__lte=date_to).select_related(
+        "sale", "sale__account", "sale__sale_type", "item", "item__main_unit"
+    )
+    if item_id:
+        qs = qs.filter(item_id=item_id)
+    if account_id:
+        qs = qs.filter(sale__account_id=account_id)
+    if group:
+        qs = qs.filter(item__item_group__iexact=group.strip())
+
+    items_map = defaultdict(lambda: {"item": None, "qty": ZERO, "basic": ZERO, "tax": ZERO, "net": ZERO})
+    party_map = defaultdict(lambda: {"account": None, "invoices": set(), "qty": ZERO, "basic": ZERO, "tax": ZERO, "net": ZERO})
+    group_map = defaultdict(lambda: {"group": "", "qty": ZERO, "basic": ZERO, "tax": ZERO, "net": ZERO})
+    month_map = defaultdict(lambda: {"month_key": "", "month_label": "", "invoices": set(), "qty": ZERO, "basic": ZERO, "tax": ZERO, "net": ZERO})
+
+    all_invoices = set()
+    total_net = ZERO
+    total_basic = ZERO
+    total_tax = ZERO
+    total_qty = ZERO
+
+    for line in qs:
+        sale = line.sale
+        item = line.item
+        party = sale.account
+        grp = item.item_group.strip() if (item and item.item_group) else "General"
+        m_key = sale.date.strftime("%Y-%m")
+        m_label = sale.date.strftime("%b %Y")
+
+        s_ti = bool(sale.sale_type_id and sale.sale_type.tax_inclusive)
+        line_amts = compute_line_amounts(line, tax_inclusive=s_ti)
+
+        b_amt = line_amts["amount_after_discount"]
+        t_amt = line_amts["tax_amount"]
+        n_amt = line_amts["line_total"]
+        q = line.total_quantity
+
+        total_basic += b_amt
+        total_tax += t_amt
+        total_net += n_amt
+        total_qty += q
+        all_invoices.add(sale.id)
+
+        if item:
+            i_rec = items_map[item.id]
+            i_rec["item"] = item
+            i_rec["qty"] += q
+            i_rec["basic"] += b_amt
+            i_rec["tax"] += t_amt
+            i_rec["net"] += n_amt
+
+        if party:
+            p_rec = party_map[party.id]
+            p_rec["account"] = party
+            p_rec["invoices"].add(sale.id)
+            p_rec["qty"] += q
+            p_rec["basic"] += b_amt
+            p_rec["tax"] += t_amt
+            p_rec["net"] += n_amt
+
+        g_rec = group_map[grp]
+        g_rec["group"] = grp
+        g_rec["qty"] += q
+        g_rec["basic"] += b_amt
+        g_rec["tax"] += t_amt
+        g_rec["net"] += n_amt
+
+        m_rec = month_map[m_key]
+        m_rec["month_key"] = m_key
+        m_rec["month_label"] = m_label
+        m_rec["invoices"].add(sale.id)
+        m_rec["qty"] += q
+        m_rec["basic"] += b_amt
+        m_rec["tax"] += t_amt
+        m_rec["net"] += n_amt
+
+    item_rows = []
+    for rec in items_map.values():
+        net = rec["net"]
+        qty = rec["qty"]
+        avg_rate = money(rec["basic"] / qty) if qty > 0 else ZERO
+        share = round((float(net) / float(total_net) * 100), 2) if total_net > 0 else 0.0
+        item_rows.append({
+            "item": rec["item"],
+            "item_name": rec["item"].item_name if rec["item"] else "",
+            "group": rec["item"].item_group or "General" if rec["item"] else "General",
+            "unit": rec["item"].main_unit.name if (rec["item"] and rec["item"].main_unit) else "",
+            "qty": qty,
+            "basic": money(rec["basic"]),
+            "tax": money(rec["tax"]),
+            "net": money(net),
+            "avg_rate": avg_rate,
+            "share_pct": share,
+        })
+    item_rows.sort(key=lambda r: r["net"], reverse=True)
+
+    party_rows = []
+    for rec in party_map.values():
+        net = rec["net"]
+        inv_cnt = len(rec["invoices"])
+        avg_bill = money(net / Decimal(inv_cnt)) if inv_cnt > 0 else ZERO
+        share = round((float(net) / float(total_net) * 100), 2) if total_net > 0 else 0.0
+        party_rows.append({
+            "account": rec["account"],
+            "party_name": rec["account"].account_name if rec["account"] else "",
+            "city": rec["account"].state or "" if rec["account"] else "",
+            "invoice_count": inv_cnt,
+            "qty": rec["qty"],
+            "basic": money(rec["basic"]),
+            "tax": money(rec["tax"]),
+            "net": money(net),
+            "avg_bill": avg_bill,
+            "share_pct": share,
+        })
+    party_rows.sort(key=lambda r: r["net"], reverse=True)
+
+    group_rows = []
+    for rec in group_map.values():
+        net = rec["net"]
+        share = round((float(net) / float(total_net) * 100), 2) if total_net > 0 else 0.0
+        group_rows.append({
+            "group": rec["group"],
+            "qty": rec["qty"],
+            "basic": money(rec["basic"]),
+            "tax": money(rec["tax"]),
+            "net": money(net),
+            "share_pct": share,
+        })
+    group_rows.sort(key=lambda r: r["net"], reverse=True)
+
+    month_rows = []
+    for m_key in sorted(month_map.keys()):
+        rec = month_map[m_key]
+        net = rec["net"]
+        share = round((float(net) / float(total_net) * 100), 2) if total_net > 0 else 0.0
+        month_rows.append({
+            "month_key": rec["month_key"],
+            "month_label": rec["month_label"],
+            "invoice_count": len(rec["invoices"]),
+            "qty": rec["qty"],
+            "basic": money(rec["basic"]),
+            "tax": money(rec["tax"]),
+            "net": money(net),
+            "share_pct": share,
+        })
+
+    return {
+        "item_rows": item_rows,
+        "party_rows": party_rows,
+        "group_rows": group_rows,
+        "month_rows": month_rows,
+        "total_net": money(total_net),
+        "total_basic": money(total_basic),
+        "total_tax": money(total_tax),
+        "total_qty": total_qty,
+        "total_invoices": len(all_invoices),
+        "top_item": item_rows[0] if item_rows else None,
+        "top_party": party_rows[0] if party_rows else None,
+    }
+
+
+# =========================================================
+# PURCHASE ANALYSIS
+# =========================================================
+
+def purchase_analysis(date_from, date_to, item_id=None, account_id=None, group=None):
+    """
+    Comprehensive Purchase Analysis:
+    - Item-wise Purchase Analysis
+    - Supplier-wise Purchase Analysis
+    - Group-wise Purchase Analysis
+    - Monthly Purchase Trend
+    """
+    qs = PurchaseItem.objects.filter(purchase__date__gte=date_from, purchase__date__lte=date_to).select_related(
+        "purchase", "purchase__account", "purchase__purchase_type", "item", "item__main_unit"
+    )
+    if item_id:
+        qs = qs.filter(item_id=item_id)
+    if account_id:
+        qs = qs.filter(purchase__account_id=account_id)
+    if group:
+        qs = qs.filter(item__item_group__iexact=group.strip())
+
+    items_map = defaultdict(lambda: {"item": None, "qty": ZERO, "basic": ZERO, "tax": ZERO, "net": ZERO})
+    party_map = defaultdict(lambda: {"account": None, "bills": set(), "qty": ZERO, "basic": ZERO, "tax": ZERO, "net": ZERO})
+    group_map = defaultdict(lambda: {"group": "", "qty": ZERO, "basic": ZERO, "tax": ZERO, "net": ZERO})
+    month_map = defaultdict(lambda: {"month_key": "", "month_label": "", "bills": set(), "qty": ZERO, "basic": ZERO, "tax": ZERO, "net": ZERO})
+
+    all_bills = set()
+    total_net = ZERO
+    total_basic = ZERO
+    total_tax = ZERO
+    total_qty = ZERO
+
+    for line in qs:
+        purchase = line.purchase
+        item = line.item
+        party = purchase.account
+        grp = item.item_group.strip() if (item and item.item_group) else "General"
+        m_key = purchase.date.strftime("%Y-%m")
+        m_label = purchase.date.strftime("%b %Y")
+
+        p_ti = bool(purchase.purchase_type_id and purchase.purchase_type.tax_inclusive)
+        line_amts = compute_line_amounts(line, tax_inclusive=p_ti)
+
+        b_amt = line_amts["amount_after_discount"]
+        t_amt = line_amts["tax_amount"]
+        n_amt = line_amts["line_total"]
+        q = line.total_quantity
+
+        total_basic += b_amt
+        total_tax += t_amt
+        total_net += n_amt
+        total_qty += q
+        all_bills.add(purchase.id)
+
+        if item:
+            i_rec = items_map[item.id]
+            i_rec["item"] = item
+            i_rec["qty"] += q
+            i_rec["basic"] += b_amt
+            i_rec["tax"] += t_amt
+            i_rec["net"] += n_amt
+
+        if party:
+            p_rec = party_map[party.id]
+            p_rec["account"] = party
+            p_rec["bills"].add(purchase.id)
+            p_rec["qty"] += q
+            p_rec["basic"] += b_amt
+            p_rec["tax"] += t_amt
+            p_rec["net"] += n_amt
+
+        g_rec = group_map[grp]
+        g_rec["group"] = grp
+        g_rec["qty"] += q
+        g_rec["basic"] += b_amt
+        g_rec["tax"] += t_amt
+        g_rec["net"] += n_amt
+
+        m_rec = month_map[m_key]
+        m_rec["month_key"] = m_key
+        m_rec["month_label"] = m_label
+        m_rec["bills"].add(purchase.id)
+        m_rec["qty"] += q
+        m_rec["basic"] += b_amt
+        m_rec["tax"] += t_amt
+        m_rec["net"] += n_amt
+
+    item_rows = []
+    for rec in items_map.values():
+        net = rec["net"]
+        qty = rec["qty"]
+        avg_rate = money(rec["basic"] / qty) if qty > 0 else ZERO
+        share = round((float(net) / float(total_net) * 100), 2) if total_net > 0 else 0.0
+        item_rows.append({
+            "item": rec["item"],
+            "item_name": rec["item"].item_name if rec["item"] else "",
+            "group": rec["item"].item_group or "General" if rec["item"] else "General",
+            "unit": rec["item"].main_unit.name if (rec["item"] and rec["item"].main_unit) else "",
+            "qty": qty,
+            "basic": money(rec["basic"]),
+            "tax": money(rec["tax"]),
+            "net": money(net),
+            "avg_rate": avg_rate,
+            "share_pct": share,
+        })
+    item_rows.sort(key=lambda r: r["net"], reverse=True)
+
+    party_rows = []
+    for rec in party_map.values():
+        net = rec["net"]
+        bill_cnt = len(rec["bills"])
+        avg_bill = money(net / Decimal(bill_cnt)) if bill_cnt > 0 else ZERO
+        share = round((float(net) / float(total_net) * 100), 2) if total_net > 0 else 0.0
+        party_rows.append({
+            "account": rec["account"],
+            "party_name": rec["account"].account_name if rec["account"] else "",
+            "city": rec["account"].state or "" if rec["account"] else "",
+            "bill_count": bill_cnt,
+            "qty": rec["qty"],
+            "basic": money(rec["basic"]),
+            "tax": money(rec["tax"]),
+            "net": money(net),
+            "avg_bill": avg_bill,
+            "share_pct": share,
+        })
+    party_rows.sort(key=lambda r: r["net"], reverse=True)
+
+    group_rows = []
+    for rec in group_map.values():
+        net = rec["net"]
+        share = round((float(net) / float(total_net) * 100), 2) if total_net > 0 else 0.0
+        group_rows.append({
+            "group": rec["group"],
+            "qty": rec["qty"],
+            "basic": money(rec["basic"]),
+            "tax": money(rec["tax"]),
+            "net": money(net),
+            "share_pct": share,
+        })
+    group_rows.sort(key=lambda r: r["net"], reverse=True)
+
+    month_rows = []
+    for m_key in sorted(month_map.keys()):
+        rec = month_map[m_key]
+        net = rec["net"]
+        share = round((float(net) / float(total_net) * 100), 2) if total_net > 0 else 0.0
+        month_rows.append({
+            "month_key": rec["month_key"],
+            "month_label": rec["month_label"],
+            "bill_count": len(rec["bills"]),
+            "qty": rec["qty"],
+            "basic": money(rec["basic"]),
+            "tax": money(rec["tax"]),
+            "net": money(net),
+            "share_pct": share,
+        })
+
+    return {
+        "item_rows": item_rows,
+        "party_rows": party_rows,
+        "group_rows": group_rows,
+        "month_rows": month_rows,
+        "total_net": money(total_net),
+        "total_basic": money(total_basic),
+        "total_tax": money(total_tax),
+        "total_qty": total_qty,
+        "total_bills": len(all_bills),
+        "top_item": item_rows[0] if item_rows else None,
+        "top_party": party_rows[0] if party_rows else None,
+    }
+

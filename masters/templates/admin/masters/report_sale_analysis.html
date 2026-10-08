@@ -1,0 +1,297 @@
+{% extends "admin/masters/report_base.html" %}
+
+{% block report_title %}Sales Analysis{% endblock %}
+{% block report_subtitle_extra %} | Invoices: <strong>{{ total_invoices }}</strong> | Net Sales: <strong>&#8377; {{ total_net }}</strong>{% endblock %}
+
+{% block report_filters %}
+  <div class="erp-field-item">
+    <label>Item Group</label>
+    <select name="group" class="erp-combobox" data-placeholder="All Groups">
+      <option value="">All Item Groups</option>
+      {% for g in item_groups %}
+      <option value="{{ g }}"{% if selected_group == g %} selected{% endif %}>{{ g }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="erp-field-item" style="min-width: 240px;">
+    <label>Stock Item</label>
+    <select name="item" class="erp-combobox" data-placeholder="All Items">
+      <option value="">All Items</option>
+      {% for itm in all_items %}
+      <option value="{{ itm.id }}" data-sub="{{ itm.item_group|default:'General' }}"{% if selected_item_id == itm.id %} selected{% endif %}>
+        {{ itm.item_name }}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="erp-field-item" style="min-width: 240px;">
+    <label>Customer</label>
+    <select name="account" class="erp-combobox" data-placeholder="All Customers">
+      <option value="">All Customers</option>
+      {% for p in all_parties %}
+      <option value="{{ p.id }}" data-sub="{{ p.account_group.name }}"{% if selected_account_id == p.id %} selected{% endif %}>
+        {{ p.account_name }}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+{% endblock %}
+
+{% block report_summary %}
+<div class="erp-kpi-grid">
+  <div class="erp-kpi-card tone-primary">
+    <div class="erp-kpi-label">Total Net Sales</div>
+    <div class="erp-kpi-val">&#8377; {{ total_net }}</div>
+    <div class="erp-kpi-sub">{{ total_invoices }} invoices in period</div>
+  </div>
+  <div class="erp-kpi-card tone-purple">
+    <div class="erp-kpi-label">Total Qty Sold</div>
+    <div class="erp-kpi-val">{{ total_qty }} <small style="font-size:0.8rem; font-weight:normal; color:#64748b;">units</small></div>
+    <div class="erp-kpi-sub">Taxable: &#8377; {{ total_basic }}</div>
+  </div>
+  <div class="erp-kpi-card tone-success">
+    <div class="erp-kpi-label">Top Selling Item</div>
+    <div class="erp-kpi-val" style="font-size:1.1rem; line-height:1.2;">
+      {% if top_item %}{{ top_item.item_name }}{% else %}-{% endif %}
+    </div>
+    <div class="erp-kpi-sub">
+      {% if top_item %}&#8377; {{ top_item.net }} ({{ top_item.share_pct }}% share){% else %}-{% endif %}
+    </div>
+  </div>
+  <div class="erp-kpi-card tone-warning">
+    <div class="erp-kpi-label">Top Customer</div>
+    <div class="erp-kpi-val" style="font-size:1.1rem; line-height:1.2;">
+      {% if top_party %}{{ top_party.party_name }}{% else %}-{% endif %}
+    </div>
+    <div class="erp-kpi-sub">
+      {% if top_party %}&#8377; {{ top_party.net }} ({{ top_party.share_pct }}% share){% else %}-{% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block report_body %}
+<div class="erp-tabs-nav">
+  <button type="button" class="erp-tab-btn active" data-tab="tab-items">📦 Item-wise Sales Analysis</button>
+  <button type="button" class="erp-tab-btn" data-tab="tab-customers">👥 Customer-wise Sales Analysis</button>
+  <button type="button" class="erp-tab-btn" data-tab="tab-groups">📁 Group-wise Sales Analysis</button>
+  <button type="button" class="erp-tab-btn" data-tab="tab-monthly">📅 Monthly Sales Trend</button>
+</div>
+
+<!-- Tab 1: Item-wise Analysis -->
+<div id="tab-items" class="erp-tab-content active">
+  <div class="erp-report-scroll">
+    <table class="erp-report">
+      <thead>
+        <tr>
+          <th style="min-width:240px;">Item Name</th>
+          <th>Group</th>
+          <th class="num" style="width:100px;">Qty Sold</th>
+          <th style="width:70px;">Unit</th>
+          <th class="num" style="width:110px;">Avg Rate (&#8377;)</th>
+          <th class="num" style="width:120px;">Taxable (&#8377;)</th>
+          <th class="num" style="width:110px;">Tax (&#8377;)</th>
+          <th class="num" style="width:130px;">Net Sales (&#8377;)</th>
+          <th style="min-width:140px;">% Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in item_rows %}
+        <tr>
+          <td>
+            <a href="{% url 'admin:erp_item_sales_register' %}?item={{ row.item.id }}&amp;from={{ date_from|date:'Y-m-d' }}&amp;to={{ date_to|date:'Y-m-d' }}">
+              <strong>{{ row.item_name }}</strong>
+            </a>
+          </td>
+          <td>{{ row.group }}</td>
+          <td class="num" style="font-weight:600;">{{ row.qty }}</td>
+          <td>{{ row.unit }}</td>
+          <td class="num">&#8377; {{ row.avg_rate }}</td>
+          <td class="num">&#8377; {{ row.basic }}</td>
+          <td class="num">&#8377; {{ row.tax }}</td>
+          <td class="num" style="font-weight:700; color:#1e3a8a;">&#8377; {{ row.net }}</td>
+          <td>
+            <div class="share-bar-cell">
+              <div class="share-bar-outer">
+                <div class="share-bar-fill" style="width: {{ row.share_pct }}%;"></div>
+              </div>
+              <span style="font-size:0.75rem; font-weight:600; min-width:40px;">{{ row.share_pct }}%</span>
+            </div>
+          </td>
+        </tr>
+        {% empty %}
+        <tr class="erp-no-filter"><td colspan="9" style="text-align:center; padding:24px; color:#94a3b8;">No sales data found for the selected period.</td></tr>
+        {% endfor %}
+        <tr class="total">
+          <td colspan="2">Total ({{ item_rows|length }} Items)</td>
+          <td class="num">{{ total_qty }}</td>
+          <td></td>
+          <td></td>
+          <td class="num">&#8377; {{ total_basic }}</td>
+          <td class="num">&#8377; {{ total_tax }}</td>
+          <td class="num">&#8377; {{ total_net }}</td>
+          <td>100%</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tab 2: Customer-wise Analysis -->
+<div id="tab-customers" class="erp-tab-content">
+  <div class="erp-report-scroll">
+    <table class="erp-report">
+      <thead>
+        <tr>
+          <th style="min-width:240px;">Customer Name</th>
+          <th>State / City</th>
+          <th class="num" style="width:100px;">Invoices Count</th>
+          <th class="num" style="width:100px;">Total Qty</th>
+          <th class="num" style="width:120px;">Taxable (&#8377;)</th>
+          <th class="num" style="width:110px;">Tax (&#8377;)</th>
+          <th class="num" style="width:130px;">Net Sales (&#8377;)</th>
+          <th class="num" style="width:120px;">Avg Bill (&#8377;)</th>
+          <th style="min-width:140px;">% Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in party_rows %}
+        <tr>
+          <td>
+            <a href="{% url 'admin:erp_ledger' row.account.id %}?from={{ date_from|date:'Y-m-d' }}&amp;to={{ date_to|date:'Y-m-d' }}">
+              <strong>{{ row.party_name }}</strong>
+            </a>
+          </td>
+          <td>{{ row.city|default:"-" }}</td>
+          <td class="num">{{ row.invoice_count }}</td>
+          <td class="num">{{ row.qty }}</td>
+          <td class="num">&#8377; {{ row.basic }}</td>
+          <td class="num">&#8377; {{ row.tax }}</td>
+          <td class="num" style="font-weight:700; color:#1e3a8a;">&#8377; {{ row.net }}</td>
+          <td class="num">&#8377; {{ row.avg_bill }}</td>
+          <td>
+            <div class="share-bar-cell">
+              <div class="share-bar-outer">
+                <div class="share-bar-fill" style="width: {{ row.share_pct }}%; background:#10b981;"></div>
+              </div>
+              <span style="font-size:0.75rem; font-weight:600; min-width:40px;">{{ row.share_pct }}%</span>
+            </div>
+          </td>
+        </tr>
+        {% empty %}
+        <tr class="erp-no-filter"><td colspan="9" style="text-align:center; padding:24px; color:#94a3b8;">No customer sales data found.</td></tr>
+        {% endfor %}
+        <tr class="total">
+          <td colspan="2">Total ({{ party_rows|length }} Customers)</td>
+          <td class="num">{{ total_invoices }}</td>
+          <td class="num">{{ total_qty }}</td>
+          <td class="num">&#8377; {{ total_basic }}</td>
+          <td class="num">&#8377; {{ total_tax }}</td>
+          <td class="num">&#8377; {{ total_net }}</td>
+          <td></td>
+          <td>100%</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tab 3: Group-wise Analysis -->
+<div id="tab-groups" class="erp-tab-content">
+  <div class="erp-report-scroll">
+    <table class="erp-report">
+      <thead>
+        <tr>
+          <th style="min-width:240px;">Item Group</th>
+          <th class="num" style="width:110px;">Total Qty</th>
+          <th class="num" style="width:130px;">Taxable (&#8377;)</th>
+          <th class="num" style="width:120px;">Tax (&#8377;)</th>
+          <th class="num" style="width:140px;">Net Sales (&#8377;)</th>
+          <th style="min-width:140px;">% Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in group_rows %}
+        <tr>
+          <td><strong>{{ row.group }}</strong></td>
+          <td class="num">{{ row.qty }}</td>
+          <td class="num">&#8377; {{ row.basic }}</td>
+          <td class="num">&#8377; {{ row.tax }}</td>
+          <td class="num" style="font-weight:700; color:#1e3a8a;">&#8377; {{ row.net }}</td>
+          <td>
+            <div class="share-bar-cell">
+              <div class="share-bar-outer">
+                <div class="share-bar-fill" style="width: {{ row.share_pct }}%; background:#8b5cf6;"></div>
+              </div>
+              <span style="font-size:0.75rem; font-weight:600; min-width:40px;">{{ row.share_pct }}%</span>
+            </div>
+          </td>
+        </tr>
+        {% empty %}
+        <tr class="erp-no-filter"><td colspan="6" style="text-align:center; padding:24px; color:#94a3b8;">No group data found.</td></tr>
+        {% endfor %}
+        <tr class="total">
+          <td>Total ({{ group_rows|length }} Groups)</td>
+          <td class="num">{{ total_qty }}</td>
+          <td class="num">&#8377; {{ total_basic }}</td>
+          <td class="num">&#8377; {{ total_tax }}</td>
+          <td class="num">&#8377; {{ total_net }}</td>
+          <td>100%</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tab 4: Monthly Trend -->
+<div id="tab-monthly" class="erp-tab-content">
+  <div class="erp-report-scroll">
+    <table class="erp-report">
+      <thead>
+        <tr>
+          <th style="min-width:160px;">Month</th>
+          <th class="num" style="width:110px;">Invoices Count</th>
+          <th class="num" style="width:110px;">Total Qty</th>
+          <th class="num" style="width:130px;">Taxable (&#8377;)</th>
+          <th class="num" style="width:120px;">Tax (&#8377;)</th>
+          <th class="num" style="width:140px;">Net Sales (&#8377;)</th>
+          <th style="min-width:140px;">% of Period Sales</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in month_rows %}
+        <tr>
+          <td><strong>{{ row.month_label }}</strong></td>
+          <td class="num">{{ row.invoice_count }}</td>
+          <td class="num">{{ row.qty }}</td>
+          <td class="num">&#8377; {{ row.basic }}</td>
+          <td class="num">&#8377; {{ row.tax }}</td>
+          <td class="num" style="font-weight:700; color:#1e3a8a;">&#8377; {{ row.net }}</td>
+          <td>
+            <div class="share-bar-cell">
+              <div class="share-bar-outer">
+                <div class="share-bar-fill" style="width: {{ row.share_pct }}%; background:#f59e0b;"></div>
+              </div>
+              <span style="font-size:0.75rem; font-weight:600; min-width:40px;">{{ row.share_pct }}%</span>
+            </div>
+          </td>
+        </tr>
+        {% empty %}
+        <tr class="erp-no-filter"><td colspan="7" style="text-align:center; padding:24px; color:#94a3b8;">No monthly sales records.</td></tr>
+        {% endfor %}
+        <tr class="total">
+          <td>Total ({{ month_rows|length }} Months)</td>
+          <td class="num">{{ total_invoices }}</td>
+          <td class="num">{{ total_qty }}</td>
+          <td class="num">&#8377; {{ total_basic }}</td>
+          <td class="num">&#8377; {{ total_tax }}</td>
+          <td class="num">&#8377; {{ total_net }}</td>
+          <td>100%</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

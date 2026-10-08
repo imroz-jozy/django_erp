@@ -1,61 +1,135 @@
 {% extends "admin/masters/report_base.html" %}
 
+{% block report_title %}
+  {% if data %}Account Ledger — {{ data.account.account_name }}{% else %}Account Ledger{% endif %}
+{% endblock %}
+
+{% block report_subtitle_extra %}
+  {% if data %} | Group: <strong>{{ data.account.account_group }}</strong>{% if data.account.gst %} | GSTIN: <strong>{{ data.account.gst }}</strong>{% endif %}{% endif %}
+{% endblock %}
+
 {% block report_filters %}
-  <label>Account
-    <select name="account">
-      <option value="">Select account</option>
+  <div class="erp-field-item">
+    <label>Filter by Group</label>
+    <select name="group" class="erp-combobox" data-placeholder="All Groups">
+      <option value="">All Account Groups</option>
+      {% for grp in account_groups %}
+      <option value="{{ grp.id }}"{% if selected_group_id == grp.id %} selected{% endif %}>{{ grp.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="erp-field-item" style="min-width: 260px;">
+    <label>Select Account *</label>
+    <select name="account" class="erp-combobox" data-placeholder="Search Account..." required>
+      <option value="">-- Choose Account --</option>
       {% for acc in accounts %}
-      <option value="{{ acc.id }}"{% if data and data.account.id == acc.id %} selected{% endif %}>
-        {{ acc.account_name }} ({{ acc.account_group }})
+      <option value="{{ acc.id }}" data-sub="{{ acc.account_group.name }}"{% if data and data.account.id == acc.id %} selected{% elif not data and forloop.first and not selected_group_id %} selected{% endif %}>
+        {{ acc.account_name }}
       </option>
       {% endfor %}
     </select>
-  </label>
+  </div>
+
+  <div class="erp-field-item">
+    <label>&nbsp;</label>
+    <label class="erp-checkbox-item">
+      <input type="checkbox" name="show_zero" value="1"{% if show_zero %} checked{% endif %}>
+      <span>Show Zero Balances</span>
+    </label>
+  </div>
+{% endblock %}
+
+{% block report_summary %}
+{% if data %}
+<div class="erp-kpi-grid">
+  <div class="erp-kpi-card tone-purple">
+    <div class="erp-kpi-label">Opening Balance</div>
+    <div class="erp-kpi-val">&#8377; {{ data.opening_balance }} <small style="font-size:0.85rem;">{{ data.opening_dr_cr }}</small></div>
+    <div class="erp-kpi-sub">As of {{ date_from|date:"d M Y" }}</div>
+  </div>
+  <div class="erp-kpi-card tone-warning">
+    <div class="erp-kpi-label">Total Debit in Period</div>
+    <div class="erp-kpi-val">&#8377; {{ data.period_dr }}</div>
+    <div class="erp-kpi-sub">Inward debits</div>
+  </div>
+  <div class="erp-kpi-card tone-success">
+    <div class="erp-kpi-label">Total Credit in Period</div>
+    <div class="erp-kpi-val">&#8377; {{ data.period_cr }}</div>
+    <div class="erp-kpi-sub">Outward credits</div>
+  </div>
+  <div class="erp-kpi-card tone-primary">
+    <div class="erp-kpi-label">Closing Balance</div>
+    <div class="erp-kpi-val">&#8377; {{ data.closing_balance }} <small style="font-size:0.85rem;">{{ data.closing_dr_cr }}</small></div>
+    <div class="erp-kpi-sub">As of {{ date_to|date:"d M Y" }}</div>
+  </div>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block report_body %}
 {% if data %}
-<table class="erp-report">
-  <thead>
-    <tr>
-      <th>Date</th>
-      <th>Type</th>
-      <th>Voucher</th>
-      <th>Narration</th>
-      <th class="num">Debit</th>
-      <th class="num">Credit</th>
-      <th class="num">Balance</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td colspan="4">Opening</td>
-      <td class="num">{{ data.opening_dr }}</td>
-      <td class="num">{{ data.opening_cr }}</td>
-      <td class="num">{{ data.opening_balance }} {{ data.opening_dr_cr }}</td>
-    </tr>
-    {% for row in data.rows %}
-    <tr>
-      <td>{{ row.date }}</td>
-      <td>{{ row.vtype }}</td>
-      <td>
-        {% if row.voucher_url %}<a href="{{ row.voucher_url }}">{{ row.voucher_no }}</a>{% else %}{{ row.voucher_no }}{% endif %}
-      </td>
-      <td>{{ row.narration }}</td>
-      <td class="num">{% if row.debit %}{{ row.debit }}{% endif %}</td>
-      <td class="num">{% if row.credit %}{{ row.credit }}{% endif %}</td>
-      <td class="num">{{ row.balance }} {{ row.dr_cr }}</td>
-    </tr>
-    {% empty %}
-    <tr><td colspan="7">No transactions in this period.</td></tr>
-    {% endfor %}
-    <tr class="total">
-      <td colspan="4">Closing</td>
-      <td class="num">{{ data.period_dr }}</td>
-      <td class="num">{{ data.period_cr }}</td>
-      <td class="num">{{ data.closing_balance }} {{ data.closing_dr_cr }}</td>
-    </tr>
-  </tbody>
-</table>
+<div class="erp-report-scroll">
+  <table class="erp-report">
+    <thead>
+      <tr>
+        <th style="width:110px;">Date</th>
+        <th style="width:120px;">Voucher Type</th>
+        <th style="width:130px;">Voucher No</th>
+        <th style="min-width:240px;">Narration / Description</th>
+        <th class="num" style="width:140px;">Debit (&#8377;)</th>
+        <th class="num" style="width:140px;">Credit (&#8377;)</th>
+        <th class="num" style="width:160px;">Running Balance</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="background:var(--darkened-bg, #f8fafc); font-weight:600;">
+        <td colspan="4"><strong>Opening Balance (as of {{ date_from|date:"d M Y" }})</strong></td>
+        <td class="num">{% if data.opening_dr %}&#8377; {{ data.opening_dr }}{% endif %}</td>
+        <td class="num">{% if data.opening_cr %}&#8377; {{ data.opening_cr }}{% endif %}</td>
+        <td class="num" style="color:#1e3a8a;">&#8377; {{ data.opening_balance }} {{ data.opening_dr_cr }}</td>
+      </tr>
+
+      {% for row in data.rows %}
+      <tr>
+        <td>{{ row.date|date:"d-m-Y" }}</td>
+        <td><span class="badge badge-neutral">{{ row.vtype }}</span></td>
+        <td>
+          {% if row.voucher_url %}
+            <a href="{{ row.voucher_url }}" title="Click to view/edit voucher"><strong>{{ row.voucher_no }}</strong></a>
+          {% else %}
+            <strong>{{ row.voucher_no }}</strong>
+          {% endif %}
+        </td>
+        <td>{{ row.narration|default:"-" }}</td>
+        <td class="num">{% if row.debit %}&#8377; {{ row.debit }}{% endif %}</td>
+        <td class="num">{% if row.credit %}&#8377; {{ row.credit }}{% endif %}</td>
+        <td class="num" style="font-weight:600;">&#8377; {{ row.balance }} <span class="badge {% if row.dr_cr == 'Dr' %}badge-warning{% else %}badge-success{% endif %}">{{ row.dr_cr }}</span></td>
+      </tr>
+      {% empty %}
+      <tr class="erp-no-filter">
+        <td colspan="7" style="text-align:center; padding:24px; color:#94a3b8;">
+          No transactions recorded for this account in the selected period.
+        </td>
+      </tr>
+      {% endfor %}
+
+      <tr class="total">
+        <td colspan="4">Total &amp; Closing Balance</td>
+        <td class="num">&#8377; {{ data.period_dr }}</td>
+        <td class="num">&#8377; {{ data.period_cr }}</td>
+        <td class="num" style="color:#1e3a8a; font-size:1.05rem;">&#8377; {{ data.closing_balance }} {{ data.closing_dr_cr }}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div style="background:var(--body-bg, #fff); border:1px solid var(--border-color, #e2e8f0); border-radius:8px; padding:32px; text-align:center;">
+  <div style="font-size:2rem; margin-bottom:8px;">📖</div>
+  <h2 style="margin:0 0 8px; color:var(--body-fg, #334155);">Please Select an Account</h2>
+  <p style="color:#64748b; margin:0 auto 16px; max-width:480px;">
+    Choose an account from the searchable dropdown above and click <strong>Show Report</strong> to view its running ledger.
+  </p>
+</div>
 {% endif %}
 {% endblock %}

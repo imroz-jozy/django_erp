@@ -1,0 +1,106 @@
+{% extends "admin/masters/report_base.html" %}
+
+{% block report_title %}Day Book (All Vouchers Register){% endblock %}
+{% block report_subtitle_extra %} | Total Vouchers: <strong>{{ count }}</strong>{% endblock %}
+
+{% block report_filters %}
+  <div class="erp-field-item">
+    <label>Voucher Type</label>
+    <select name="vtype" class="erp-combobox" data-placeholder="All Voucher Types">
+      {% for code, label in vtype_choices %}
+      <option value="{{ code }}"{% if selected_vtype == code %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="erp-field-item" style="min-width: 240px;">
+    <label>Party / Account</label>
+    <select name="account" class="erp-combobox" data-placeholder="All Accounts">
+      <option value="">All Accounts</option>
+      {% for acc in accounts %}
+      <option value="{{ acc.id }}" data-sub="{{ acc.account_group.name }}"{% if selected_account_id == acc.id %} selected{% endif %}>
+        {{ acc.account_name }}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="erp-field-item">
+    <label>Min Amount (&#8377;)</label>
+    <input type="number" name="min_amount" value="{{ min_amount }}" placeholder="0.00" step="0.01">
+  </div>
+
+  <div class="erp-field-item">
+    <label>Max Amount (&#8377;)</label>
+    <input type="number" name="max_amount" value="{{ max_amount }}" placeholder="0.00" step="0.01">
+  </div>
+{% endblock %}
+
+{% block report_summary %}
+<div class="erp-kpi-grid">
+  <div class="erp-kpi-card tone-primary">
+    <div class="erp-kpi-label">Total Transactions Value</div>
+    <div class="erp-kpi-val">&#8377; {{ total }}</div>
+    <div class="erp-kpi-sub">{{ count }} vouchers across all types</div>
+  </div>
+  {% for vt, cnt in counts_by_type.items %}
+  <div class="erp-kpi-card">
+    <div class="erp-kpi-label">{{ vt }} Vouchers</div>
+    <div class="erp-kpi-val">{{ cnt }} <small style="font-size:0.8rem; font-weight:normal; color:#64748b;">entries</small></div>
+    <div class="erp-kpi-sub">
+      {% for at, val in amounts_by_type.items %}{% if at == vt %}&#8377; {{ val }}{% endif %}{% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}
+
+{% block report_body %}
+<div class="erp-report-scroll">
+  <table class="erp-report">
+    <thead>
+      <tr>
+        <th style="width:110px;">Date</th>
+        <th style="width:130px;">Voucher Type</th>
+        <th style="width:130px;">Voucher No</th>
+        <th style="min-width:220px;">Account / Particulars</th>
+        <th style="min-width:200px;">Narration</th>
+        <th class="num" style="width:130px;">Amount (&#8377;)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>{{ row.date|date:"d-m-Y" }}</td>
+        <td>
+          <span class="badge {% if row.vtype == 'Sale' %}badge-success{% elif row.vtype == 'Purchase' %}badge-warning{% elif row.vtype == 'Payment' %}badge-danger{% elif row.vtype == 'Receipt' %}badge-primary{% else %}badge-neutral{% endif %}">
+            {{ row.vtype }}
+          </span>
+        </td>
+        <td>
+          {% if row.voucher_url %}
+            <a href="{{ row.voucher_url }}" title="Click to view/edit voucher"><strong>{{ row.voucher_no }}</strong></a>
+          {% else %}
+            <strong>{{ row.voucher_no }}</strong>
+          {% endif %}
+        </td>
+        <td>{{ row.account_name|default:"-" }}</td>
+        <td>{{ row.narration|default:"-" }}</td>
+        <td class="num" style="font-weight:700;">&#8377; {{ row.amount }}</td>
+      </tr>
+      {% empty %}
+      <tr class="erp-no-filter">
+        <td colspan="6" style="text-align:center; padding:24px; color:#94a3b8;">
+          No vouchers found matching the selected criteria in this period.
+        </td>
+      </tr>
+      {% endfor %}
+
+      <tr class="total">
+        <td colspan="5">Total ({{ count }} Vouchers)</td>
+        <td class="num">&#8377; {{ total }}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}

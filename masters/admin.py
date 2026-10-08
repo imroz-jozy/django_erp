@@ -92,6 +92,15 @@ from .reports import (
     sale_return_register,
     sales_register,
     stock_figures,
+    stock_status_report,
+    all_vouchers_register,
+    item_stock_ledger,
+    item_sales_register,
+    item_purchase_register,
+    item_sale_return_register,
+    item_purchase_return_register,
+    sales_analysis,
+    purchase_analysis,
     trial_balance,
 )
 
@@ -331,11 +340,35 @@ def purchase_register_view(request):
 
 def stock_summary_view(request):
     date_from, date_to = period_from_request(request)
-    data = stock_figures(date_from, date_to)
+    group = request.GET.get("group") or None
+    item_id = request.GET.get("item") or None
+    include_zero = request.GET.get("show_zero", "1") == "1"
+    stock_filter = request.GET.get("stock_filter") or None
+
+    data = stock_status_report(
+        date_from,
+        date_to,
+        group=group,
+        item_id=item_id,
+        include_zero=include_zero,
+        stock_filter=stock_filter,
+    )
+    all_items = Item.objects.filter(item_type=Item.ItemType.GOODS).select_related("main_unit").order_by("item_name")
+    item_groups = sorted(list(set(Item.objects.exclude(item_group="").values_list("item_group", flat=True))))
+
+    ctx = {
+        **data,
+        "selected_group": group or "",
+        "selected_item_id": int(item_id) if item_id else None,
+        "show_zero": include_zero,
+        "stock_filter": stock_filter or "",
+        "all_items": all_items,
+        "item_groups": item_groups,
+    }
     return TemplateResponse(
         request,
         "admin/masters/report_stock.html",
-        _report_context(request, "Stock Summary", data),
+        _report_context(request, "Stock Status / Summary", ctx),
     )
 
 
@@ -459,6 +492,15 @@ def gst_outward_summary_view(request):
 
 def ledger_view(request, account_id=None):
     date_from, date_to = period_from_request(request)
+    group_id = request.GET.get("group")
+    show_zero = request.GET.get("show_zero", "1") == "1"
+
+    accounts_qs = Account.objects.select_related("account_group").order_by("account_name")
+    if group_id:
+        accounts_qs = accounts_qs.filter(account_group_id=group_id)
+
+    account_groups = AccountGroup.objects.all().order_by("name")
+
     if account_id is None:
         account_id = request.GET.get("account")
         if account_id:
@@ -471,9 +513,12 @@ def ledger_view(request, account_id=None):
             "admin/masters/report_ledger.html",
             _report_context(
                 request,
-                "Ledger",
+                "Account Ledger",
                 {
-                    "accounts": Account.objects.select_related("account_group"),
+                    "accounts": accounts_qs,
+                    "account_groups": account_groups,
+                    "selected_group_id": int(group_id) if group_id else None,
+                    "show_zero": show_zero,
                     "data": None,
                 },
             ),
@@ -485,9 +530,12 @@ def ledger_view(request, account_id=None):
         "admin/masters/report_ledger.html",
         _report_context(
             request,
-            f"Ledger — {account.account_name}",
+            f"Account Ledger — {account.account_name}",
             {
-                "accounts": Account.objects.select_related("account_group"),
+                "accounts": accounts_qs,
+                "account_groups": account_groups,
+                "selected_group_id": int(group_id) if group_id else None,
+                "show_zero": show_zero,
                 "data": data,
             },
         ),
@@ -498,13 +546,279 @@ def group_drill_view(request, group_id=None):
     date_from, date_to = period_from_request(request)
     natures_param = request.GET.get("natures")
     natures = natures_param.split(",") if natures_param else None
+    show_zero = request.GET.get("show_zero", "1") == "1"
+
     data = group_drill(date_from, date_to, group_id=group_id, natures=natures)
+    
+    if not show_zero:
+        ledger_rows = data.get("ledger_rows", [])
+        ledger_rows = [r for r in ledger_rows if r["balance"] != ZERO or r["debit"] != ZERO or r["credit"] != ZERO]
+        data["ledger_rows"] = ledger_rows
+
     title = f"Group Summary — {data['current'].name}" if data["current"] else "Group Summary"
     return TemplateResponse(
         request,
         "admin/masters/report_group_summary.html",
-        _report_context(request, title, {**data, "natures_param": natures_param or ""}),
+        _report_context(request, title, {**data, "natures_param": natures_param or "", "show_zero": show_zero}),
     )
+
+
+def all_vouchers_register_view(request):
+    date_from, date_to = period_from_request(request)
+    vtype = request.GET.get("vtype") or None
+    account_id = request.GET.get("account") or None
+    min_amount = request.GET.get("min_amount") or None
+    max_amount = request.GET.get("max_amount") or None
+
+    data = all_vouchers_register(
+        date_from, date_to, vtype=vtype, account_id=account_id, min_amount=min_amount, max_amount=max_amount
+    )
+    accounts = Account.objects.all().order_by("account_name")
+    vtype_choices = [
+        ("", "All Voucher Types"),
+        ("Sale", "Sale Vouchers"),
+        ("Purchase", "Purchase Vouchers"),
+        ("Payment", "Payment Vouchers"),
+        ("Receipt", "Receipt Vouchers"),
+        ("Journal", "Journal Vouchers"),
+        ("Sale Return", "Sale Return Vouchers"),
+        ("Purchase Return", "Purchase Return Vouchers"),
+        ("Credit Note", "Credit Notes"),
+        ("Debit Note", "Debit Notes"),
+    ]
+    ctx = {
+        **data,
+        "selected_vtype": vtype or "",
+        "selected_account_id": int(account_id) if account_id else None,
+        "min_amount": min_amount or "",
+        "max_amount": max_amount or "",
+        "accounts": accounts,
+        "vtype_choices": vtype_choices,
+    }
+    return TemplateResponse(
+        request,
+        "admin/masters/report_all_vouchers.html",
+        _report_context(request, "Day Book (All Vouchers Register)", ctx),
+    )
+
+
+def item_stock_ledger_view(request, item_id=None):
+    date_from, date_to = period_from_request(request)
+    all_items = Item.objects.filter(item_type=Item.ItemType.GOODS).select_related("main_unit").order_by("item_name")
+
+    if item_id is None:
+        item_id = request.GET.get("item")
+        if item_id:
+            return redirect(
+                f"{reverse('admin:erp_item_stock_ledger', args=[item_id])}"
+                f"?from={date_from:%Y-%m-%d}&to={date_to:%Y-%m-%d}"
+            )
+        return TemplateResponse(
+            request,
+            "admin/masters/report_item_stock_ledger.html",
+            _report_context(
+                request,
+                "Item Stock Ledger (Movement)",
+                {
+                    "all_items": all_items,
+                    "item": None,
+                    "data": None,
+                },
+            ),
+        )
+    item = get_object_or_404(Item, pk=item_id)
+    data = item_stock_ledger(item, date_from, date_to)
+    return TemplateResponse(
+        request,
+        "admin/masters/report_item_stock_ledger.html",
+        _report_context(
+            request,
+            f"Item Stock Ledger — {item.item_name}",
+            {
+                "all_items": all_items,
+                "item": item,
+                "data": data,
+            },
+        ),
+    )
+
+
+def item_sales_register_view(request):
+    date_from, date_to = period_from_request(request)
+    item_id = request.GET.get("item") or None
+    account_id = request.GET.get("account") or None
+    group = request.GET.get("group") or None
+
+    data = item_sales_register(date_from, date_to, item_id=item_id, account_id=account_id, group=group)
+    all_items = Item.objects.all().order_by("item_name")
+    all_parties = Account.objects.all().order_by("account_name")
+    item_groups = sorted(list(set(Item.objects.exclude(item_group="").values_list("item_group", flat=True))))
+
+    ctx = {
+        **data,
+        "register_type": "Sales",
+        "party_label": "Customer",
+        "all_items": all_items,
+        "all_parties": all_parties,
+        "item_groups": item_groups,
+        "selected_item_id": int(item_id) if item_id else None,
+        "selected_account_id": int(account_id) if account_id else None,
+        "selected_group": group or "",
+    }
+    return TemplateResponse(
+        request,
+        "admin/masters/report_item_register.html",
+        _report_context(request, "Item-wise Sales Register", ctx),
+    )
+
+
+def item_purchase_register_view(request):
+    date_from, date_to = period_from_request(request)
+    item_id = request.GET.get("item") or None
+    account_id = request.GET.get("account") or None
+    group = request.GET.get("group") or None
+
+    data = item_purchase_register(date_from, date_to, item_id=item_id, account_id=account_id, group=group)
+    all_items = Item.objects.all().order_by("item_name")
+    all_parties = Account.objects.all().order_by("account_name")
+    item_groups = sorted(list(set(Item.objects.exclude(item_group="").values_list("item_group", flat=True))))
+
+    ctx = {
+        **data,
+        "register_type": "Purchase",
+        "party_label": "Supplier",
+        "all_items": all_items,
+        "all_parties": all_parties,
+        "item_groups": item_groups,
+        "selected_item_id": int(item_id) if item_id else None,
+        "selected_account_id": int(account_id) if account_id else None,
+        "selected_group": group or "",
+    }
+    return TemplateResponse(
+        request,
+        "admin/masters/report_item_register.html",
+        _report_context(request, "Item-wise Purchase Register", ctx),
+    )
+
+
+def item_sale_return_register_view(request):
+    date_from, date_to = period_from_request(request)
+    item_id = request.GET.get("item") or None
+    account_id = request.GET.get("account") or None
+    group = request.GET.get("group") or None
+
+    data = item_sale_return_register(date_from, date_to, item_id=item_id, account_id=account_id, group=group)
+    all_items = Item.objects.all().order_by("item_name")
+    all_parties = Account.objects.all().order_by("account_name")
+    item_groups = sorted(list(set(Item.objects.exclude(item_group="").values_list("item_group", flat=True))))
+
+    ctx = {
+        **data,
+        "register_type": "Sale Return",
+        "party_label": "Customer",
+        "all_items": all_items,
+        "all_parties": all_parties,
+        "item_groups": item_groups,
+        "selected_item_id": int(item_id) if item_id else None,
+        "selected_account_id": int(account_id) if account_id else None,
+        "selected_group": group or "",
+    }
+    return TemplateResponse(
+        request,
+        "admin/masters/report_item_register.html",
+        _report_context(request, "Item-wise Sale Return Register", ctx),
+    )
+
+
+def item_purchase_return_register_view(request):
+    date_from, date_to = period_from_request(request)
+    item_id = request.GET.get("item") or None
+    account_id = request.GET.get("account") or None
+    group = request.GET.get("group") or None
+
+    data = item_purchase_return_register(date_from, date_to, item_id=item_id, account_id=account_id, group=group)
+    all_items = Item.objects.all().order_by("item_name")
+    all_parties = Account.objects.all().order_by("account_name")
+    item_groups = sorted(list(set(Item.objects.exclude(item_group="").values_list("item_group", flat=True))))
+
+    ctx = {
+        **data,
+        "register_type": "Purchase Return",
+        "party_label": "Supplier",
+        "all_items": all_items,
+        "all_parties": all_parties,
+        "item_groups": item_groups,
+        "selected_item_id": int(item_id) if item_id else None,
+        "selected_account_id": int(account_id) if account_id else None,
+        "selected_group": group or "",
+    }
+    return TemplateResponse(
+        request,
+        "admin/masters/report_item_register.html",
+        _report_context(request, "Item-wise Purchase Return Register", ctx),
+    )
+
+
+def sale_analysis_view(request):
+    date_from, date_to = period_from_request(request)
+    item_id = request.GET.get("item") or None
+    account_id = request.GET.get("account") or None
+    group = request.GET.get("group") or None
+
+    data = sales_analysis(date_from, date_to, item_id=item_id, account_id=account_id, group=group)
+    all_items = Item.objects.all().order_by("item_name")
+    all_parties = Account.objects.all().order_by("account_name")
+    item_groups = sorted(list(set(Item.objects.exclude(item_group="").values_list("item_group", flat=True))))
+
+    ctx = {
+        **data,
+        "all_items": all_items,
+        "all_parties": all_parties,
+        "item_groups": item_groups,
+        "selected_item_id": int(item_id) if item_id else None,
+        "selected_account_id": int(account_id) if account_id else None,
+        "selected_group": group or "",
+    }
+    return TemplateResponse(
+        request,
+        "admin/masters/report_sale_analysis.html",
+        _report_context(request, "Sales Analysis", ctx),
+    )
+
+
+def purchase_analysis_view(request):
+    date_from, date_to = period_from_request(request)
+    item_id = request.GET.get("item") or None
+    account_id = request.GET.get("account") or None
+    group = request.GET.get("group") or None
+
+    data = purchase_analysis(date_from, date_to, item_id=item_id, account_id=account_id, group=group)
+    all_items = Item.objects.all().order_by("item_name")
+    all_parties = Account.objects.all().order_by("account_name")
+    item_groups = sorted(list(set(Item.objects.exclude(item_group="").values_list("item_group", flat=True))))
+
+    ctx = {
+        **data,
+        "all_items": all_items,
+        "all_parties": all_parties,
+        "item_groups": item_groups,
+        "selected_item_id": int(item_id) if item_id else None,
+        "selected_account_id": int(account_id) if account_id else None,
+        "selected_group": group or "",
+    }
+    return TemplateResponse(
+        request,
+        "admin/masters/report_purchase_analysis.html",
+        _report_context(request, "Purchase Analysis", ctx),
+    )
+
+
+def reports_hub_view(request):
+    ctx = {
+        **admin.site.each_context(request),
+        "title": "Reports Directory & Center",
+    }
+    return TemplateResponse(request, "admin/masters/report_hub.html", ctx)
 
 
 def item_detail_view(request, item_id):
@@ -1163,6 +1477,61 @@ if not getattr(admin.site, "_erp_urls_patched", False):
 
     def _get_urls():
         return [
+            path(
+                "reports/",
+                admin.site.admin_view(reports_hub_view),
+                name="erp_reports_hub",
+            ),
+            path(
+                "reports/all-vouchers-register/",
+                admin.site.admin_view(all_vouchers_register_view),
+                name="erp_all_vouchers_register",
+            ),
+            path(
+                "reports/stock-status/",
+                admin.site.admin_view(stock_summary_view),
+                name="erp_stock_status",
+            ),
+            path(
+                "reports/item-stock-ledger/",
+                admin.site.admin_view(item_stock_ledger_view),
+                name="erp_item_stock_ledger_index",
+            ),
+            path(
+                "reports/item-stock-ledger/<int:item_id>/",
+                admin.site.admin_view(item_stock_ledger_view),
+                name="erp_item_stock_ledger",
+            ),
+            path(
+                "reports/item-sales-register/",
+                admin.site.admin_view(item_sales_register_view),
+                name="erp_item_sales_register",
+            ),
+            path(
+                "reports/item-purchase-register/",
+                admin.site.admin_view(item_purchase_register_view),
+                name="erp_item_purchase_register",
+            ),
+            path(
+                "reports/item-sale-return-register/",
+                admin.site.admin_view(item_sale_return_register_view),
+                name="erp_item_sale_return_register",
+            ),
+            path(
+                "reports/item-purchase-return-register/",
+                admin.site.admin_view(item_purchase_return_register_view),
+                name="erp_item_purchase_return_register",
+            ),
+            path(
+                "reports/sale-analysis/",
+                admin.site.admin_view(sale_analysis_view),
+                name="erp_sale_analysis",
+            ),
+            path(
+                "reports/purchase-analysis/",
+                admin.site.admin_view(purchase_analysis_view),
+                name="erp_purchase_analysis",
+            ),
             path(
                 "reports/profit-loss/",
                 admin.site.admin_view(profit_loss_view),
@@ -2581,7 +2950,7 @@ class JournalAdmin(admin.ModelAdmin):
 
     class Media:
         css = {"all": ("masters/css/sale_voucher.css", "masters/css/cash_voucher.css")}
-        js = ("masters/js/cash_voucher.js",)
+        js = ("masters/js/cash_voucher.js", "masters/js/journal_helper.js")
 
     def _totals(self, obj):
         if not obj or not obj.pk:

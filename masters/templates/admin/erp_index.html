@@ -119,59 +119,112 @@
   </div>
   {% endif %}
 
-  <div class="erp-section-heading" id="import">Reports &amp; Data</div>
-  <div class="module">
-    <table>
-      <caption>Reports</caption>
-      <tr>
-        <th scope="row"><a href="{% url 'admin:erp_ledger_index' %}">Ledger</a></th>
-        <td>Account-wise debit / credit running balance</td>
-      </tr>
-      <tr>
-        <th scope="row"><a href="{% url 'admin:erp_trial_balance' %}">Trial Balance</a></th>
-        <td>Ledger debit / credit totals</td>
-      </tr>
-      <tr>
-        <th scope="row"><a href="{% url 'admin:erp_profit_loss' %}">Profit &amp; Loss</a></th>
-        <td>Trading and profit &amp; loss account</td>
-      </tr>
-      <tr>
-        <th scope="row"><a href="{% url 'admin:erp_balance_sheet' %}">Balance Sheet</a></th>
-        <td>Assets, liabilities and capital</td>
-      </tr>
-      <tr>
-        <th scope="row"><a href="{% url 'admin:erp_sales_register' %}">Sales Register</a></th>
-        <td>Sale invoices with net amount</td>
-      </tr>
-      <tr>
-        <th scope="row"><a href="{% url 'admin:erp_purchase_register' %}">Purchase Register</a></th>
-        <td>Purchase invoices with net amount</td>
-      </tr>
-      <tr>
-        <th scope="row"><a href="{% url 'admin:erp_payment_register' %}">Payment Register</a></th>
-        <td>Payments from cash / bank</td>
-      </tr>
-      <tr>
-        <th scope="row"><a href="{% url 'admin:erp_receipt_register' %}">Receipt Register</a></th>
-        <td>Receipts into cash / bank</td>
-      </tr>
-      <tr>
-        <th scope="row"><a href="{% url 'admin:erp_journal_register' %}">Journal Register</a></th>
-        <td>Journal vouchers (debit = credit)</td>
-      </tr>
-      <tr>
-        <th scope="row"><a href="{% url 'admin:erp_stock_summary' %}">Stock Summary</a></th>
-        <td>Opening, inward, outward and closing</td>
-      </tr>
-      <tr>
-        <th scope="row"><a href="{% url 'admin:erp_hsn_summary' %}">HSN Summary</a></th>
-        <td>Item-wise HSN summary</td>
-      </tr>
-      <tr>
-        <th scope="row"><a href="{% url 'admin:erp_gst_outward_summary' %}">GST Outward Summary</a></th>
-        <td>B2B, B2C, and Notes (GSTR-1 format)</td>
-      </tr>
-    </table>
+  <div class="erp-section-heading" id="reports">
+    <span>Reports &amp; Books Directory</span>
+    <a href="{% url 'admin:erp_reports_hub' %}" style="float: right; font-size: 0.85rem; font-weight: 600; color: #2563eb; text-decoration: none;">View All Reports Center &rarr;</a>
+  </div>
+  <div class="erp-dashboard-columns" style="margin-bottom: 20px;">
+    <!-- Partition 1: Account Books -->
+    <div class="module" style="margin-bottom: 0;">
+      <table>
+        <caption>📁 Partition 1: Account Books (खाता बही)</caption>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_ledger_index' %}">Account Ledger</a></th>
+          <td>Single account debit / credit running balance</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_group_summary_index' %}">Group Summary</a></th>
+          <td>Hierarchical group summary with zero-balance filter</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_all_vouchers_register' %}">Day Book (All Vouchers)</a></th>
+          <td>Consolidated register of all voucher types</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_sales_register' %}">Sales Register</a></th>
+          <td>Sale invoices with tax breakdown and net amount</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_purchase_register' %}">Purchase Register</a></th>
+          <td>Purchase bills with tax breakdown and net amount</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_payment_register' %}">Payment Register</a></th>
+          <td>Payments made from cash / bank accounts</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_receipt_register' %}">Receipt Register</a></th>
+          <td>Receipts collected into cash / bank accounts</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_journal_register' %}">Journal Register</a></th>
+          <td>Journal adjustment vouchers</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_sale_return_register' %}">Sale Return Register</a></th>
+          <td>Customer goods returns and credits</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_purchase_return_register' %}">Purchase Return Register</a></th>
+          <td>Supplier goods returns and debits</td>
+        </tr>
+      </table>
+    </div>
+
+    <!-- Partition 2 & 3: Stock Status & Inventory Books -->
+    <div class="module" style="margin-bottom: 0;">
+      <table>
+        <caption>📦 Partition 2 &amp; 3: Stock Status &amp; Inventory Books</caption>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_stock_summary' %}" style="font-weight:700; color:#16a34a;">Stock Status &amp; Summary</a></th>
+          <td>Opening, inward, outward, closing qty &amp; WAR valuation</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_item_stock_ledger_index' %}">Item Stock Ledger</a></th>
+          <td>Item movement card with running stock balance</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_item_sales_register' %}">Item Sales Register</a></th>
+          <td>Item-level sales lines with rates and taxes</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_item_purchase_register' %}">Item Purchase Register</a></th>
+          <td>Item-level purchase lines with rates and taxes</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_item_sale_return_register' %}">Item Sale Return Reg.</a></th>
+          <td>Item-level customer goods returns</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_item_purchase_return_register' %}">Item Purchase Return Reg.</a></th>
+          <td>Item-level supplier goods returns</td>
+        </tr>
+      </table>
+
+      <table style="margin-top: 14px;">
+        <caption>📊 Partition 4 &amp; 5: Analysis &amp; Trends</caption>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_sale_analysis' %}" style="font-weight:700; color:#2563eb;">Sales Analysis</a></th>
+          <td>Item-wise, customer-wise, group-wise &amp; monthly trend</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_purchase_analysis' %}" style="font-weight:700; color:#d97706;">Purchase Analysis</a></th>
+          <td>Item-wise, supplier-wise, group-wise &amp; monthly trend</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_trial_balance' %}">Trial Balance</a></th>
+          <td>Debit and credit ledger totals reconciliation</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_profit_loss' %}">Profit &amp; Loss</a></th>
+          <td>Trading and profit &amp; loss statement</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="{% url 'admin:erp_balance_sheet' %}">Balance Sheet</a></th>
+          <td>Assets, liabilities, capital &amp; closing stock</td>
+        </tr>
+      </table>
+    </div>
   </div>
   <div class="module">
     <table>

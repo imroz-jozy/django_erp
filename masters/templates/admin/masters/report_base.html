@@ -1,92 +1,946 @@
 {% extends "admin/base_site.html" %}
+{% load i18n %}
 
 {% block extrahead %}
 {{ block.super }}
 <style>
-  .erp-filter { margin: 0 0 16px; padding: 8px 0; }
-  .erp-filter input[type="date"] { margin-right: 8px; }
-  .erp-search { margin: 0 0 12px; }
-  .erp-search input[type="search"] { width: 260px; max-width: 100%; }
-  .erp-report { width: 100%; border-collapse: collapse; }
-  .erp-report th, .erp-report td { padding: 6px 8px; border-bottom: 1px solid var(--border-color, #ddd); white-space: nowrap; }
-  .erp-report .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .erp-report .total td { font-weight: 700; border-top: 2px solid currentColor; }
-  .erp-report .group { font-weight: 700; background: var(--darkened-bg, #f8f8f8); }
-  .erp-split { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-  .erp-breadcrumbs { margin: 0 0 12px; }
-  .erp-breadcrumbs a { margin-right: 4px; }
-  /* Scrollable report tables: both axes scroll, header stays pinned to
-     the top of the scroll area and the totals row stays pinned to the
-     bottom, so the column headings and the running total are always
-     visible no matter how far you've scrolled. */
+  /* ERP Report Layout & Header */
+  .erp-report-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-color, #e0e0e0);
+  }
+  .erp-report-title-area h1 {
+    margin: 0 0 4px;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--header-color, #1a202c);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .erp-report-subtitle {
+    font-size: 0.85rem;
+    color: var(--body-quiet-color, #64748b);
+  }
+
+  /* Desktop ERP Filter Bar */
+  .erp-filter-card {
+    background: var(--darkened-bg, #f8fafc);
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+  }
+  .erp-filter-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 12px;
+  }
+  .erp-field-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .erp-field-item label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--body-quiet-color, #64748b);
+  }
+  .erp-field-item input[type="date"],
+  .erp-field-item input[type="text"],
+  .erp-field-item input[type="number"],
+  .erp-field-item select {
+    padding: 6px 10px;
+    border: 1px solid var(--border-color, #cbd5e1);
+    border-radius: 5px;
+    font-size: 0.875rem;
+    background: var(--body-bg, #fff);
+    color: var(--body-fg, #1e293b);
+    min-width: 140px;
+    height: 36px;
+    box-sizing: border-box;
+  }
+  .erp-field-item input:focus,
+  .erp-field-item select:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+  }
+  .erp-filter-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: auto;
+  }
+  .erp-btn-primary {
+    background: #2563eb;
+    color: #fff !important;
+    border: none;
+    border-radius: 5px;
+    padding: 8px 18px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    height: 36px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: background 0.15s;
+  }
+  .erp-btn-primary:hover {
+    background: #1d4ed8;
+  }
+  .erp-btn-secondary {
+    background: var(--body-bg, #fff);
+    color: var(--body-fg, #334155) !important;
+    border: 1px solid var(--border-color, #cbd5e1);
+    border-radius: 5px;
+    padding: 8px 14px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    height: 36px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    text-decoration: none;
+    transition: all 0.15s;
+  }
+  .erp-btn-secondary:hover {
+    background: var(--darkened-bg, #f1f5f9);
+    border-color: #94a3b8;
+  }
+
+  /* Date Quick Preset Chips */
+  .erp-date-presets {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+    font-size: 0.78rem;
+  }
+  .erp-date-preset-label {
+    font-weight: 600;
+    color: var(--body-quiet-color, #64748b);
+    margin-right: 2px;
+  }
+  .erp-chip {
+    background: var(--body-bg, #fff);
+    border: 1px solid var(--border-color, #cbd5e1);
+    border-radius: 12px;
+    padding: 2px 10px;
+    color: var(--body-fg, #475569);
+    cursor: pointer;
+    transition: all 0.12s;
+    user-select: none;
+  }
+  .erp-chip:hover {
+    background: #e0e7ff;
+    border-color: #818cf8;
+    color: #3730a3;
+  }
+
+  /* Checkbox / Toggle filter */
+  .erp-checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 36px;
+    padding: 0 4px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--body-fg, #334155);
+  }
+  .erp-checkbox-item input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: #2563eb;
+    cursor: pointer;
+  }
+
+  /* Searchable Combobox Widget */
+  .erp-combobox-wrap {
+    position: relative;
+    display: inline-block;
+    min-width: 220px;
+  }
+  .erp-combobox-input {
+    width: 100%;
+    height: 36px;
+    padding: 6px 30px 6px 10px;
+    border: 1px solid var(--border-color, #cbd5e1);
+    border-radius: 5px;
+    font-size: 0.875rem;
+    background: var(--body-bg, #fff);
+    color: var(--body-fg, #1e293b);
+    box-sizing: border-box;
+    cursor: text;
+  }
+  .erp-combobox-arrow {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    font-size: 0.65rem;
+    color: #64748b;
+  }
+  .erp-combobox-clear {
+    position: absolute;
+    right: 22px;
+    top: 50%;
+    transform: translateY(-50%);
+    cursor: pointer;
+    color: #94a3b8;
+    font-size: 0.9rem;
+    display: none;
+    padding: 2px;
+  }
+  .erp-combobox-clear:hover {
+    color: #ef4444;
+  }
+  .erp-combobox-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 1050;
+    background: var(--body-bg, #fff);
+    border: 1px solid var(--border-color, #cbd5e1);
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+    max-height: 280px;
+    overflow-y: auto;
+    display: none;
+    min-width: 260px;
+  }
+  .erp-combobox-item {
+    padding: 8px 12px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border-color, #f1f5f9);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  .erp-combobox-item:hover,
+  .erp-combobox-item.is-highlighted {
+    background: #eff6ff;
+    color: #1d4ed8;
+  }
+  .erp-combobox-item.is-selected {
+    background: #dbeafe;
+    font-weight: 600;
+  }
+  .erp-combobox-sub {
+    font-size: 0.75rem;
+    color: #64748b;
+    background: var(--darkened-bg, #f1f5f9);
+    padding: 2px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .erp-combobox-no-results {
+    padding: 12px;
+    text-align: center;
+    color: #94a3b8;
+    font-size: 0.85rem;
+  }
+
+  /* Instant Live Filter Toolbar */
+  .erp-toolbar-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .erp-live-search {
+    position: relative;
+    max-width: 320px;
+    flex: 1;
+  }
+  .erp-live-search input {
+    width: 100%;
+    padding: 7px 12px 7px 32px;
+    border: 1px solid var(--border-color, #cbd5e1);
+    border-radius: 6px;
+    font-size: 0.875rem;
+    box-sizing: border-box;
+    background: var(--body-bg, #fff);
+    color: var(--body-fg, #1e293b);
+  }
+  .erp-live-search-icon {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    color: #94a3b8;
+    font-size: 0.9rem;
+  }
+  .erp-export-tools {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .erp-tool-btn {
+    background: var(--body-bg, #fff);
+    border: 1px solid var(--border-color, #cbd5e1);
+    border-radius: 5px;
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    color: var(--body-fg, #475569);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.15s;
+    user-select: none;
+  }
+  .erp-tool-btn:hover {
+    background: var(--darkened-bg, #f8fafc);
+    border-color: #94a3b8;
+  }
+
+  /* KPI / Summary Cards */
+  .erp-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .erp-kpi-card {
+    background: var(--body-bg, #fff);
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 8px;
+    padding: 12px 14px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+    position: relative;
+    overflow: hidden;
+  }
+  .erp-kpi-card::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; bottom: 0;
+    width: 4px;
+    background: #3b82f6;
+  }
+  .erp-kpi-card.tone-success::before { background: #10b981; }
+  .erp-kpi-card.tone-warning::before { background: #f59e0b; }
+  .erp-kpi-card.tone-danger::before { background: #ef4444; }
+  .erp-kpi-card.tone-purple::before { background: #8b5cf6; }
+  .erp-kpi-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--body-quiet-color, #64748b);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin-bottom: 4px;
+  }
+  .erp-kpi-val {
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: var(--body-fg, #0f172a);
+    font-variant-numeric: tabular-nums;
+  }
+  .erp-kpi-sub {
+    font-size: 0.72rem;
+    color: #94a3b8;
+    margin-top: 2px;
+  }
+
+  /* Table Design */
   .erp-report-scroll {
-    max-height: 70vh;
+    max-height: 72vh;
     overflow: auto;
-    border: 1px solid var(--border-color, #ddd);
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 6px;
+    background: var(--body-bg, #fff);
     margin-bottom: 1rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
     -webkit-overflow-scrolling: touch;
   }
-  .erp-report-scroll .erp-report { margin-bottom: 0; }
-  .erp-report-scroll .erp-report thead th {
+  .erp-report {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+    margin: 0;
+  }
+  .erp-report thead th {
     position: sticky;
     top: 0;
-    z-index: 3;
-    background: var(--body-bg, #fff);
-    box-shadow: 0 1px 0 var(--border-color, #ddd);
+    z-index: 5;
+    background: var(--darkened-bg, #f8fafc);
+    color: var(--body-fg, #334155);
+    font-weight: 700;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 10px 12px;
+    border-bottom: 2px solid var(--border-color, #cbd5e1);
+    white-space: nowrap;
+    text-align: left;
   }
-  .erp-report-scroll .erp-report tbody tr.total td {
+  .erp-report td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color, #f1f5f9);
+    white-space: nowrap;
+    color: var(--body-fg, #1e293b);
+  }
+  .erp-report tbody tr:hover {
+    background: #f8fafc;
+  }
+  .erp-report .num {
+    text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+  }
+  .erp-report .total td {
     position: sticky;
     bottom: 0;
-    z-index: 2;
-    background: var(--body-bg, #fff);
-    box-shadow: 0 -1px 0 currentColor;
+    z-index: 4;
+    background: var(--darkened-bg, #f1f5f9);
+    font-weight: 700;
+    border-top: 2px solid #334155;
+    box-shadow: 0 -1px 2px rgba(0,0,0,0.05);
   }
-  .table-responsive { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 1rem; width: 100%; }
-  @media (max-width: 900px) { .erp-split { grid-template-columns: 1fr; } }
-</style>
-<script>
-  document.addEventListener("DOMContentLoaded", function () {
-    // Wrap every report table in a scroll container (both axes) with a
-    // sticky header row and sticky totals row - applies to every report
-    // page automatically, no per-template changes needed.
-    document.querySelectorAll(".erp-report").forEach(function (table) {
-      if (table.closest(".erp-report-scroll")) return;
-      var wrapper = document.createElement("div");
-      wrapper.className = "erp-report-scroll";
-      table.parentNode.insertBefore(wrapper, table);
-      wrapper.appendChild(table);
-    });
+  .erp-report a {
+    color: #2563eb;
+    text-decoration: none;
+    font-weight: 600;
+  }
+  .erp-report a:hover {
+    text-decoration: underline;
+    color: #1d4ed8;
+  }
 
-    // Generic instant search: filters rows of every .erp-report table on
-    // this page by plain substring match. Purely client-side - it never
-    // changes what was fetched from the server, only what's shown.
-    var input = document.getElementById("erp-report-search");
-    if (!input) return;
-    var tables = document.querySelectorAll(".erp-report");
-    input.addEventListener("input", function () {
-      var q = input.value.trim().toLowerCase();
-      tables.forEach(function (table) {
-        table.querySelectorAll("tbody tr").forEach(function (row) {
-          if (row.classList.contains("total")) return;
-          var text = row.textContent.toLowerCase();
-          row.style.display = (!q || text.indexOf(q) !== -1) ? "" : "none";
-        });
+  /* Badges */
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+  .badge-success { background: #dcfce7; color: #15803d; }
+  .badge-warning { background: #fef3c7; color: #b45309; }
+  .badge-danger { background: #fee2e2; color: #b91c1c; }
+  .badge-neutral { background: #f1f5f9; color: #475569; }
+  .badge-primary { background: #e0e7ff; color: #4338ca; }
+
+  /* Tab Navigation for Multi-view Reports */
+  .erp-tabs-nav {
+    display: flex;
+    gap: 4px;
+    border-bottom: 2px solid var(--border-color, #e2e8f0);
+    margin-bottom: 16px;
+    overflow-x: auto;
+  }
+  .erp-tab-btn {
+    padding: 8px 16px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    border: none;
+    background: none;
+    color: var(--body-quiet-color, #64748b);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    white-space: nowrap;
+    transition: all 0.15s;
+  }
+  .erp-tab-btn:hover {
+    color: #2563eb;
+  }
+  .erp-tab-btn.active {
+    color: #2563eb;
+    border-bottom-color: #2563eb;
+  }
+  .erp-tab-content {
+    display: none;
+  }
+  .erp-tab-content.active {
+    display: block;
+  }
+
+  /* Visual Progress Bar for Analysis */
+  .share-bar-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .share-bar-outer {
+    flex: 1;
+    height: 6px;
+    background: #e2e8f0;
+    border-radius: 9999px;
+    overflow: hidden;
+    min-width: 60px;
+  }
+  .share-bar-fill {
+    height: 100%;
+    background: #3b82f6;
+    border-radius: 9999px;
+  }
+
+  /* Breadcrumbs */
+  .erp-breadcrumbs {
+    margin: 0 0 12px;
+    font-size: 0.85rem;
+  }
+  .erp-breadcrumbs a {
+    color: #2563eb;
+    text-decoration: none;
+  }
+
+  @media print {
+    #nav-sidebar, #header, .erp-filter-card, .erp-toolbar-row, .breadcrumbs, .toggle-nav-sidebar {
+      display: none !important;
+    }
+    .erp-report-scroll {
+      max-height: none !important;
+      overflow: visible !important;
+      border: none !important;
+    }
+    body, #content {
+      background: #fff !important;
+      color: #000 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+    }
+  }
+</style>
+
+<script>
+  // Desktop ERP Report Interactive Engine
+  document.addEventListener("DOMContentLoaded", function () {
+    // 1. Convert all select.erp-combobox to fuzzy Searchable Comboboxes
+    initSearchableComboboxes();
+
+    // 2. Initialize Date Preset Chips
+    initDatePresets();
+
+    // 3. Initialize Live Table Search & Row Count
+    initLiveSearch();
+
+    // 4. Initialize Tabs if any
+    initReportTabs();
+  });
+
+  function initSearchableComboboxes() {
+    document.querySelectorAll("select.erp-combobox").forEach(function (select) {
+      if (select.dataset.comboboxInitialized) return;
+      select.dataset.comboboxInitialized = "true";
+
+      var wrap = document.createElement("div");
+      wrap.className = "erp-combobox-wrap";
+      if (select.dataset.width) wrap.style.minWidth = select.dataset.width;
+
+      var input = document.createElement("input");
+      input.type = "text";
+      input.className = "erp-combobox-input";
+      input.placeholder = select.dataset.placeholder || select.options[0]?.text || "Search or select...";
+      input.autocomplete = "off";
+
+      var arrow = document.createElement("span");
+      arrow.className = "erp-combobox-arrow";
+      arrow.innerHTML = "▼";
+
+      var clearBtn = document.createElement("span");
+      clearBtn.className = "erp-combobox-clear";
+      clearBtn.innerHTML = "&times;";
+      clearBtn.title = "Clear";
+
+      var dropdown = document.createElement("div");
+      dropdown.className = "erp-combobox-dropdown";
+
+      // Insert wrap into DOM
+      select.parentNode.insertBefore(wrap, select);
+      wrap.appendChild(input);
+      wrap.appendChild(arrow);
+      wrap.appendChild(clearBtn);
+      wrap.appendChild(dropdown);
+      wrap.appendChild(select);
+      select.style.display = "none";
+
+      function updateInputValue() {
+        var selectedOpt = select.options[select.selectedIndex];
+        if (selectedOpt && selectedOpt.value) {
+          input.value = selectedOpt.text;
+          clearBtn.style.display = "block";
+        } else {
+          input.value = "";
+          clearBtn.style.display = "none";
+        }
+      }
+      updateInputValue();
+
+      function renderItems(filter) {
+        dropdown.innerHTML = "";
+        var filterLower = (filter || "").trim().toLowerCase();
+        var matchCount = 0;
+
+        for (var i = 0; i < select.options.length; i++) {
+          var opt = select.options[i];
+          var optText = opt.text;
+          var optVal = opt.value;
+          var optSub = opt.dataset.sub || "";
+
+          var searchTarget = (optText + " " + optSub).toLowerCase();
+          if (filterLower && searchTarget.indexOf(filterLower) === -1) {
+            continue;
+          }
+
+          matchCount++;
+          var item = document.createElement("div");
+          item.className = "erp-combobox-item";
+          if (opt.selected) item.classList.add("is-selected");
+          item.dataset.value = optVal;
+          item.dataset.index = i;
+
+          var labelSpan = document.createElement("span");
+          labelSpan.textContent = optText;
+          item.appendChild(labelSpan);
+
+          if (optSub) {
+            var subSpan = document.createElement("span");
+            subSpan.className = "erp-combobox-sub";
+            subSpan.textContent = optSub;
+            item.appendChild(subSpan);
+          }
+
+          item.addEventListener("mousedown", function (e) {
+            e.preventDefault();
+            select.selectedIndex = parseInt(this.dataset.index);
+            updateInputValue();
+            closeDropdown();
+            select.dispatchEvent(new Event("change", { bubbles: true }));
+          });
+
+          dropdown.appendChild(item);
+        }
+
+        if (matchCount === 0) {
+          var noRes = document.createElement("div");
+          noRes.className = "erp-combobox-no-results";
+          noRes.textContent = "No matches found";
+          dropdown.appendChild(noRes);
+        }
+      }
+
+      function openDropdown() {
+        renderItems(input.value);
+        dropdown.style.display = "block";
+      }
+
+      function closeDropdown() {
+        dropdown.style.display = "none";
+        updateInputValue();
+      }
+
+      input.addEventListener("focus", function () {
+        input.select();
+        openDropdown();
+      });
+
+      input.addEventListener("input", function () {
+        renderItems(input.value);
+        dropdown.style.display = "block";
+        clearBtn.style.display = input.value ? "block" : "none";
+      });
+
+      clearBtn.addEventListener("mousedown", function (e) {
+        e.preventDefault();
+        select.value = "";
+        select.selectedIndex = 0;
+        updateInputValue();
+        closeDropdown();
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+
+      input.addEventListener("keydown", function (e) {
+        var items = dropdown.querySelectorAll(".erp-combobox-item");
+        var highlighted = dropdown.querySelector(".erp-combobox-item.is-highlighted");
+        var idx = Array.prototype.indexOf.call(items, highlighted);
+
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          if (dropdown.style.display !== "block") openDropdown();
+          if (highlighted) highlighted.classList.remove("is-highlighted");
+          var next = items[idx + 1] || items[0];
+          if (next) {
+            next.classList.add("is-highlighted");
+            next.scrollIntoView({ block: "nearest" });
+          }
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          if (dropdown.style.display !== "block") openDropdown();
+          if (highlighted) highlighted.classList.remove("is-highlighted");
+          var prev = items[idx - 1] || items[items.length - 1];
+          if (prev) {
+            prev.classList.add("is-highlighted");
+            prev.scrollIntoView({ block: "nearest" });
+          }
+        } else if (e.key === "Enter") {
+          if (dropdown.style.display === "block" && highlighted) {
+            e.preventDefault();
+            select.selectedIndex = parseInt(highlighted.dataset.index);
+            updateInputValue();
+            closeDropdown();
+            select.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        } else if (e.key === "Escape") {
+          closeDropdown();
+        }
+      });
+
+      document.addEventListener("click", function (e) {
+        if (!wrap.contains(e.target)) {
+          closeDropdown();
+        }
       });
     });
-  });
+  }
+
+  function initDatePresets() {
+    var fromInput = document.querySelector('input[name="from"]');
+    var toInput = document.querySelector('input[name="to"]');
+    if (!fromInput || !toInput) return;
+
+    function formatDate(d) {
+      return d.toISOString().split("T")[0];
+    }
+
+    window.setDatePreset = function (preset) {
+      var now = new Date();
+      var fromDate, toDate;
+
+      if (preset === "today") {
+        fromDate = new Date(now);
+        toDate = new Date(now);
+      } else if (preset === "yesterday") {
+        fromDate = new Date(now);
+        fromDate.setDate(fromDate.getDate() - 1);
+        toDate = new Date(fromDate);
+      } else if (preset === "this_month") {
+        fromDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        toDate = new Date(now);
+      } else if (preset === "last_month") {
+        fromDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        toDate = new Date(now.getFullYear(), now.getMonth(), 0);
+      } else if (preset === "this_fy") {
+        var year = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+        fromDate = new Date(year, 3, 1);
+        toDate = new Date(year + 1, 2, 31);
+      } else if (preset === "all") {
+        fromDate = new Date(2000, 0, 1);
+        toDate = new Date(now.getFullYear() + 1, 11, 31);
+      }
+
+      if (fromDate && toDate) {
+        fromInput.value = formatDate(fromDate);
+        toInput.value = formatDate(toDate);
+        var form = fromInput.closest("form");
+        if (form) form.submit();
+      }
+    };
+  }
+
+  function initLiveSearch() {
+    var searchInput = document.getElementById("erp-live-search-input");
+    if (!searchInput) return;
+
+    var tables = document.querySelectorAll(".erp-report");
+    var counterSpan = document.getElementById("erp-row-counter");
+
+    function filterRows() {
+      var q = searchInput.value.trim().toLowerCase();
+      var totalVisible = 0;
+      var totalRows = 0;
+
+      tables.forEach(function (table) {
+        var rows = table.querySelectorAll("tbody tr");
+        rows.forEach(function (row) {
+          if (row.classList.contains("total") || row.classList.contains("erp-no-filter")) return;
+          totalRows++;
+          var text = row.textContent.toLowerCase();
+          var match = !q || text.indexOf(q) !== -1;
+          row.style.display = match ? "" : "none";
+          if (match) totalVisible++;
+        });
+      });
+
+      if (counterSpan) {
+        counterSpan.textContent = "Showing " + totalVisible + " of " + totalRows + " rows";
+      }
+    }
+
+    searchInput.addEventListener("input", filterRows);
+    filterRows();
+  }
+
+  function initReportTabs() {
+    var tabBtns = document.querySelectorAll(".erp-tab-btn");
+    if (!tabBtns.length) return;
+
+    tabBtns.forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var targetId = this.dataset.tab;
+        tabBtns.forEach(function (b) { b.classList.remove("active"); });
+        document.querySelectorAll(".erp-tab-content").forEach(function (c) { c.classList.remove("active"); });
+
+        this.classList.add("active");
+        var targetContent = document.getElementById(targetId);
+        if (targetContent) targetContent.classList.add("active");
+      });
+    });
+  }
+
+  // Quick Action Utilities
+  window.exportTableToCSV = function (filename) {
+    var activeTable = document.querySelector(".erp-tab-content.active .erp-report") || document.querySelector(".erp-report");
+    if (!activeTable) return;
+
+    var csv = [];
+    var rows = activeTable.querySelectorAll("tr");
+
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      if (row.style.display === "none") continue;
+      var cols = row.querySelectorAll("th, td");
+      var rowData = [];
+      for (var j = 0; j < cols.length; j++) {
+        var text = cols[j].innerText.replace(/(\r\n|\n|\r)/gm, " ").trim();
+        text = text.replace(/"/g, '""');
+        rowData.push('"' + text + '"');
+      }
+      csv.push(rowData.join(","));
+    }
+
+    var csvFile = new Blob([csv.join("\n")], { type: "text/csv;charset=utf-8;" });
+    var downloadLink = document.createElement("a");
+    downloadLink.download = (filename || "report") + "_" + new Date().toISOString().split("T")[0] + ".csv";
+    downloadLink.href = window.URL.createObjectURL(csvFile);
+    downloadLink.style.display = "none";
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+  };
+
+  window.copyTableData = function () {
+    var activeTable = document.querySelector(".erp-tab-content.active .erp-report") || document.querySelector(".erp-report");
+    if (!activeTable) return;
+
+    var textData = [];
+    var rows = activeTable.querySelectorAll("tr");
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].style.display === "none") continue;
+      var cols = rows[i].querySelectorAll("th, td");
+      var rowText = [];
+      for (var j = 0; j < cols.length; j++) {
+        rowText.push(cols[j].innerText.trim());
+      }
+      textData.push(rowText.join("\t"));
+    }
+
+    navigator.clipboard.writeText(textData.join("\n")).then(function () {
+      alert("Report data copied to clipboard!");
+    });
+  };
 </script>
 {% endblock %}
 
 {% block content %}
-<form class="erp-filter" method="get">
-  <label>From <input type="date" name="from" value="{{ date_from|date:'Y-m-d' }}"></label>
-  <label>To <input type="date" name="to" value="{{ date_to|date:'Y-m-d' }}"></label>
-  {% block report_filters %}{% endblock %}
-  <button type="submit" class="button">Show</button>
-  <a href="{% url 'admin:index' %}" style="margin-left:12px;">Back to admin</a>
-</form>
-<div class="erp-search">
-  <input type="search" id="erp-report-search" placeholder="Search this report...">
+<div class="erp-report-header">
+  <div class="erp-report-title-area">
+    <h1>{% block report_title %}{{ title }}{% endblock %}</h1>
+    <div class="erp-report-subtitle">
+      Period: <strong>{{ date_from|date:"d M Y" }}</strong> to <strong>{{ date_to|date:"d M Y" }}</strong>
+      {% block report_subtitle_extra %}{% endblock %}
+    </div>
+  </div>
+  <div class="erp-header-actions">
+    <a href="{% url 'admin:erp_reports_hub' %}" class="erp-btn-secondary">
+      <span>📁</span> All Reports
+    </a>
+    <a href="{% url 'admin:index' %}" class="erp-btn-secondary">
+      <span>🏠</span> Dashboard
+    </a>
+  </div>
 </div>
+
+<div class="erp-filter-card">
+  <form class="erp-filter-form" method="get">
+    <div class="erp-field-item">
+      <label>From Date</label>
+      <input type="date" name="from" value="{{ date_from|date:'Y-m-d' }}" required>
+    </div>
+    <div class="erp-field-item">
+      <label>To Date</label>
+      <input type="date" name="to" value="{{ date_to|date:'Y-m-d' }}" required>
+    </div>
+
+    {% block report_filters %}{% endblock %}
+
+    <div class="erp-filter-actions">
+      <button type="submit" class="erp-btn-primary">
+        <span>🔍</span> Show Report
+      </button>
+      <a href="?" class="erp-btn-secondary" title="Reset Filters">Reset</a>
+    </div>
+  </form>
+
+  <div class="erp-date-presets">
+    <span class="erp-date-preset-label">Quick Period:</span>
+    <span class="erp-chip" onclick="setDatePreset('today')">Today</span>
+    <span class="erp-chip" onclick="setDatePreset('yesterday')">Yesterday</span>
+    <span class="erp-chip" onclick="setDatePreset('this_month')">This Month</span>
+    <span class="erp-chip" onclick="setDatePreset('last_month')">Last Month</span>
+    <span class="erp-chip" onclick="setDatePreset('this_fy')">This FY</span>
+    <span class="erp-chip" onclick="setDatePreset('all')">All Time</span>
+  </div>
+</div>
+
+{% block report_summary %}{% endblock %}
+
+<div class="erp-toolbar-row">
+  <div class="erp-live-search">
+    <span class="erp-live-search-icon">🔍</span>
+    <input type="search" id="erp-live-search-input" placeholder="Type to filter rows in this report...">
+  </div>
+  <div class="erp-export-tools">
+    <span id="erp-row-counter" style="font-size:0.8rem; color:#64748b; margin-right:8px;"></span>
+    <button type="button" class="erp-tool-btn" onclick="copyTableData()">
+      <span>📋</span> Copy
+    </button>
+    <button type="button" class="erp-tool-btn" onclick="exportTableToCSV('{{ title|slugify }}')">
+      <span>📥</span> CSV
+    </button>
+    <button type="button" class="erp-tool-btn" onclick="window.print()">
+      <span>🖨️</span> Print
+    </button>
+  </div>
+</div>
+
 {% block report_body %}{% endblock %}
+
 {% endblock %}

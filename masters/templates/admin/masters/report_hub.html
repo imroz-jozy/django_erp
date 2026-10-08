@@ -1,0 +1,598 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block extrahead %}
+{{ block.super }}
+<style>
+  .erp-hub-header {
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    color: #fff;
+    padding: 24px 28px;
+    border-radius: 10px;
+    margin-bottom: 24px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  }
+  .erp-hub-header h1 {
+    margin: 0 0 6px;
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #f8fafc;
+  }
+  .erp-hub-header p {
+    margin: 0;
+    color: #94a3b8;
+    font-size: 0.95rem;
+  }
+  .erp-hub-search-wrap {
+    margin-top: 18px;
+    position: relative;
+    max-width: 480px;
+  }
+  .erp-hub-search {
+    width: 100%;
+    padding: 10px 16px 10px 38px;
+    border-radius: 8px;
+    border: 1px solid #334155;
+    background: #1e293b;
+    color: #fff;
+    font-size: 0.95rem;
+    box-sizing: border-box;
+    transition: all 0.2s;
+  }
+  .erp-hub-search:focus {
+    outline: none;
+    background: #0f172a;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.3);
+  }
+  .erp-hub-search-icon {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #94a3b8;
+  }
+
+  /* Section Partitions */
+  .erp-partition-section {
+    margin-bottom: 32px;
+  }
+  .erp-partition-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--body-fg, #1e293b);
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--border-color, #e2e8f0);
+    margin-bottom: 16px;
+  }
+  .erp-partition-badge {
+    background: #e0e7ff;
+    color: #3730a3;
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    font-weight: 600;
+  }
+
+  /* Grid of Report Cards */
+  .erp-reports-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  .erp-report-card {
+    background: var(--body-bg, #fff);
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 8px;
+    padding: 16px;
+    text-decoration: none;
+    color: inherit;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+    transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+    position: relative;
+    overflow: hidden;
+  }
+  .erp-report-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.08);
+    border-color: #3b82f6;
+    color: inherit;
+  }
+  .erp-card-top {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .erp-card-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.15rem;
+    flex-shrink: 0;
+  }
+  .icon-blue { background: #dbeafe; color: #1d4ed8; }
+  .icon-green { background: #dcfce7; color: #15803d; }
+  .icon-amber { background: #fef3c7; color: #b45309; }
+  .icon-purple { background: #f3e8ff; color: #7e22ce; }
+  .icon-rose { background: #ffe4e6; color: #be123c; }
+  .icon-slate { background: #f1f5f9; color: #475569; }
+
+  .erp-card-content h3 {
+    margin: 0 0 4px;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--body-fg, #0f172a);
+  }
+  .erp-card-content p {
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--body-quiet-color, #64748b);
+    line-height: 1.35;
+  }
+  .erp-card-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-color, #f1f5f9);
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #2563eb;
+  }
+</style>
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    var searchInput = document.getElementById("erp-hub-search-input");
+    if (!searchInput) return;
+
+    var cards = document.querySelectorAll(".erp-report-card");
+    var sections = document.querySelectorAll(".erp-partition-section");
+
+    searchInput.addEventListener("input", function () {
+      var q = searchInput.value.trim().toLowerCase();
+
+      sections.forEach(function (sec) {
+        var secCards = sec.querySelectorAll(".erp-report-card");
+        var secVisible = 0;
+
+        secCards.forEach(function (card) {
+          var title = (card.querySelector("h3")?.textContent || "").toLowerCase();
+          var desc = (card.querySelector("p")?.textContent || "").toLowerCase();
+          var match = !q || title.indexOf(q) !== -1 || desc.indexOf(q) !== -1;
+          card.style.display = match ? "" : "none";
+          if (match) secVisible++;
+        });
+
+        sec.style.display = secVisible > 0 ? "" : "none";
+      });
+    });
+  });
+</script>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+
+  <div class="erp-hub-header">
+    <h1>Reports Center &amp; Books Directory</h1>
+    <p>Comprehensive Desktop ERP Reports organized into Account Books, Stock Status, Inventory Books, and Analytics.</p>
+    <div class="erp-hub-search-wrap">
+      <span class="erp-hub-search-icon">🔍</span>
+      <input type="search" id="erp-hub-search-input" class="erp-hub-search" placeholder="Quickly find any report by name or feature...">
+    </div>
+  </div>
+
+  <!-- PARTITION 1: ACCOUNT BOOKS -->
+  <div class="erp-partition-section" id="account-books">
+    <div class="erp-partition-title">
+      <span>📁 Account Books (खाता बही)</span>
+      <span class="erp-partition-badge">Partition 1</span>
+    </div>
+    <div class="erp-reports-grid">
+      <a href="{% url 'admin:erp_ledger_index' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-blue">📖</div>
+          <div class="erp-card-content">
+            <h3>Account Ledger</h3>
+            <p>Single account running ledger with opening balance, Dr/Cr movements, running balance, and voucher drill-down.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>View Ledger &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_group_summary_index' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-purple">📁</div>
+          <div class="erp-card-content">
+            <h3>Group Summary</h3>
+            <p>Hierarchical group summary with sub-group rollup, ledger accounts breakdown, and zero balance filter.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>View Group Summary &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_all_vouchers_register' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-slate">📋</div>
+          <div class="erp-card-content">
+            <h3>Day Book (All Vouchers)</h3>
+            <p>Consolidated chronological register of all vouchers across all voucher types with type and account filters.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>Open Day Book &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_sales_register' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-green">🧾</div>
+          <div class="erp-card-content">
+            <h3>Sales Register</h3>
+            <p>Invoice-level sales register with customer, tax breakdown, bill sundries, and invoice net amounts.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>View Sales Register &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_purchase_register' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-amber">🛒</div>
+          <div class="erp-card-content">
+            <h3>Purchase Register</h3>
+            <p>Bill-level purchase register with supplier, tax breakdown, bill sundries, and bill net amounts.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>View Purchase Register &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_payment_register' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-rose">💸</div>
+          <div class="erp-card-content">
+            <h3>Payment Register</h3>
+            <p>Register of all cash and bank payment vouchers with recipient party details and narration.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>View Payment Register &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_receipt_register' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-green">💰</div>
+          <div class="erp-card-content">
+            <h3>Receipt Register</h3>
+            <p>Register of all cash and bank receipt vouchers with remitter party details and narration.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>View Receipt Register &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_journal_register' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-blue">📑</div>
+          <div class="erp-card-content">
+            <h3>Journal Register</h3>
+            <p>Register of journal adjustment entries with dual-sided debit and credit balance verification.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>View Journal Register &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_sale_return_register' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-rose">↩️</div>
+          <div class="erp-card-content">
+            <h3>Sale Return Register</h3>
+            <p>Register of goods returned by customers with credit adjustment figures and taxes.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>View Sale Returns &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_purchase_return_register' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-green">↪️</div>
+          <div class="erp-card-content">
+            <h3>Purchase Return Register</h3>
+            <p>Register of goods returned to suppliers with debit adjustment figures and taxes.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>View Purchase Returns &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_credit_note_register' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-rose">➖</div>
+          <div class="erp-card-content">
+            <h3>Credit Note Register</h3>
+            <p>Register of credit notes issued to customers for discounts, rate differences, and adjustments.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>View Credit Notes &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_debit_note_register' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-green">➕</div>
+          <div class="erp-card-content">
+            <h3>Debit Note Register</h3>
+            <p>Register of debit notes issued to suppliers for price adjustments and debits.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>View Debit Notes &rarr;</span>
+        </div>
+      </a>
+    </div>
+  </div>
+
+  <!-- PARTITION 2: STOCK STATUS -->
+  <div class="erp-partition-section" id="stock-status">
+    <div class="erp-partition-title">
+      <span>📦 Stock Status (स्टॉक स्थिति)</span>
+      <span class="erp-partition-badge">Partition 2</span>
+    </div>
+    <div class="erp-reports-grid">
+      <a href="{% url 'admin:erp_stock_summary' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-green">📊</div>
+          <div class="erp-card-content">
+            <h3>Stock Status &amp; Valuation</h3>
+            <p>Complete closing stock status with opening, inward, outward, closing quantities, and Weighted Average Rate (WAR) valuation. Includes group &amp; zero-balance filter.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>Open Stock Status &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_stock_summary' %}?stock_filter=zero" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-amber">⚠️</div>
+          <div class="erp-card-content">
+            <h3>Zero &amp; Low Stock Report</h3>
+            <p>Instant view of items with zero or negative stock balances requiring restocking.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>View Low Stock Items &rarr;</span>
+        </div>
+      </a>
+    </div>
+  </div>
+
+  <!-- PARTITION 3: INVENTORY BOOKS -->
+  <div class="erp-partition-section" id="inventory-books">
+    <div class="erp-partition-title">
+      <span>📚 Inventory Books (इन्वेंटरी बुक्स)</span>
+      <span class="erp-partition-badge">Partition 3</span>
+    </div>
+    <div class="erp-reports-grid">
+      <a href="{% url 'admin:erp_item_stock_ledger_index' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-blue">📦</div>
+          <div class="erp-card-content">
+            <h3>Item Stock Ledger (Movement)</h3>
+            <p>Individual stock item movement ledger card showing date-wise purchases, sales, returns, and running stock balance.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>Open Item Ledger &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_item_sales_register' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-green">🏷️</div>
+          <div class="erp-card-content">
+            <h3>Item-wise Sales Register</h3>
+            <p>Detailed item lines in sales: Item name, quantity, price, discount, tax rate, and net line total.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>View Item Sales &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_item_purchase_register' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-amber">📥</div>
+          <div class="erp-card-content">
+            <h3>Item-wise Purchase Register</h3>
+            <p>Detailed item lines in purchases: Item name, quantity, purchase rate, discount, tax, and line total.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>View Item Purchases &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_item_sale_return_register' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-rose">↩️</div>
+          <div class="erp-card-content">
+            <h3>Item-wise Sale Return Register</h3>
+            <p>Line-by-line item details returned by customers with quantities and tax amounts.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>View Item Sale Returns &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_item_purchase_return_register' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-green">↪️</div>
+          <div class="erp-card-content">
+            <h3>Item-wise Purchase Return Register</h3>
+            <p>Line-by-line item details returned to suppliers with quantities and debited amounts.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>View Item Purchase Returns &rarr;</span>
+        </div>
+      </a>
+    </div>
+  </div>
+
+  <!-- PARTITION 4: SALE ANALYSIS -->
+  <div class="erp-partition-section" id="sale-analysis">
+    <div class="erp-partition-title">
+      <span>📊 Sale Analysis (बिक्री विश्लेषण)</span>
+      <span class="erp-partition-badge">Partition 4</span>
+    </div>
+    <div class="erp-reports-grid">
+      <a href="{% url 'admin:erp_sale_analysis' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-green">📈</div>
+          <div class="erp-card-content">
+            <h3>Sales Analysis Dashboard</h3>
+            <p>Multi-dimensional sales analytics: Item-wise sales ranking, customer-wise volume, group distribution, and month-over-month trend.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>Open Sales Analysis &rarr;</span>
+        </div>
+      </a>
+    </div>
+  </div>
+
+  <!-- PARTITION 5: PURCHASE ANALYSIS -->
+  <div class="erp-partition-section" id="purchase-analysis">
+    <div class="erp-partition-title">
+      <span>📈 Purchase Analysis (खरीद विश्लेषण)</span>
+      <span class="erp-partition-badge">Partition 5</span>
+    </div>
+    <div class="erp-reports-grid">
+      <a href="{% url 'admin:erp_purchase_analysis' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-amber">📉</div>
+          <div class="erp-card-content">
+            <h3>Purchase Analysis Dashboard</h3>
+            <p>Multi-dimensional procurement analytics: Item-wise purchase volume, supplier-wise procurement, group distribution, and monthly trend.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>Open Purchase Analysis &rarr;</span>
+        </div>
+      </a>
+    </div>
+  </div>
+
+  <!-- PARTITION 6: FINANCIAL STATEMENTS -->
+  <div class="erp-partition-section" id="financial-statements">
+    <div class="erp-partition-title">
+      <span>🏛️ Financial Statements</span>
+      <span class="erp-partition-badge">Partition 6</span>
+    </div>
+    <div class="erp-reports-grid">
+      <a href="{% url 'admin:erp_trial_balance' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-blue">⚖️</div>
+          <div class="erp-card-content">
+            <h3>Trial Balance</h3>
+            <p>Ledger account balances summary with debit and credit reconciliation.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>Open Trial Balance &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_profit_loss' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-green">💹</div>
+          <div class="erp-card-content">
+            <h3>Profit &amp; Loss Statement</h3>
+            <p>Trading account, gross profit, operating expenses, and net profit / loss.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>Open Profit &amp; Loss &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_balance_sheet' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-purple">🏛️</div>
+          <div class="erp-card-content">
+            <h3>Balance Sheet</h3>
+            <p>Assets, liabilities, capital account, and closing stock position.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>Open Balance Sheet &rarr;</span>
+        </div>
+      </a>
+    </div>
+  </div>
+
+  <!-- PARTITION 7: GST REPORTS -->
+  <div class="erp-partition-section" id="gst-reports">
+    <div class="erp-partition-title">
+      <span>📑 GST Reports</span>
+      <span class="erp-partition-badge">Partition 7</span>
+    </div>
+    <div class="erp-reports-grid">
+      <a href="{% url 'admin:erp_hsn_summary' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-slate">🏷️</div>
+          <div class="erp-card-content">
+            <h3>HSN/SAC Summary (GSTR-1 Table 12)</h3>
+            <p>HSN/SAC summary of outward supplies with taxable value, CGST, SGST, IGST, and cess amounts.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>Open HSN Summary &rarr;</span>
+        </div>
+      </a>
+
+      <a href="{% url 'admin:erp_gst_outward_summary' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-slate">📑</div>
+          <div class="erp-card-content">
+            <h3>GST Outward Summary (GSTR-1)</h3>
+            <p>B2B invoices, B2C large &amp; small supplies, and credit/debit notes in GSTR-1 format.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>Open GST Outward &rarr;</span>
+        </div>
+      </a>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

@@ -17,7 +17,9 @@ from masters.models import (
     Journal,
     JournalLine,
     Purchase,
+    PurchaseItem,
     Sale,
+    SaleItem,
     Unit,
 )
 from masters.admin import JournalLineForm, JournalLineFormSet
@@ -479,4 +481,99 @@ class VoucherExcelImportTestCase(TestCase):
         line = Purchase.objects.get(invoice_no="EXCEL-PURCHASE-0").items.get()
         self.assertEqual(line.rate, Decimal("0.00"))
         self.assertEqual(line.tax, Decimal("0.00"))
+
+
+class NewReportsPartitionTestCase(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_superuser(
+            username="reportuser",
+            email="report@test.com",
+            password="secretpassword",
+        )
+        self.client.force_login(self.user)
+
+        self.unit = Unit.objects.create(name="Pcs", print_name="Pcs")
+        self.group = AccountGroup.objects.create(name="Sundry Debtors Test", nature=AccountGroup.Nature.ASSET)
+        self.customer = Account.objects.create(
+            account_name="Customer Alpha",
+            account_group=self.group,
+            opening=Decimal("100.00"),
+            opening_type=Account.OpeningType.DR,
+        )
+        self.item = Item.objects.create(
+            item_name="Widget Pro",
+            item_group="Hardware",
+            main_unit=self.unit,
+            opening_main=Decimal("10.00"),
+            opening_value=Decimal("500.00"),
+            sale_price=Decimal("100.00"),
+            purchase_price=Decimal("50.00"),
+        )
+        self.sale = Sale.objects.create(
+            date=date(2026, 5, 1),
+            invoice_no="INV-REP-001",
+            account=self.customer,
+        )
+        SaleItem.objects.create(
+            sale=self.sale,
+            item=self.item,
+            quantity=Decimal("2.00"),
+            rate=Decimal("100.00"),
+            tax=Decimal("18.00"),
+        )
+
+    def test_reports_hub_view(self):
+        url = reverse("admin:erp_reports_hub")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Reports Center")
+        self.assertContains(response, "Account Books")
+        self.assertContains(response, "Stock Status")
+        self.assertContains(response, "Inventory Books")
+        self.assertContains(response, "Sale Analysis")
+        self.assertContains(response, "Purchase Analysis")
+
+    def test_all_vouchers_register_view(self):
+        url = reverse("admin:erp_all_vouchers_register")
+        response = self.client.get(url, {"from": "2026-05-01", "to": "2026-05-31"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "INV-REP-001")
+        self.assertContains(response, "Customer Alpha")
+
+    def test_stock_status_report(self):
+        url = reverse("admin:erp_stock_summary")
+        response = self.client.get(url, {"from": "2026-05-01", "to": "2026-05-31", "show_zero": "1"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Widget Pro")
+        self.assertContains(response, "Hardware")
+
+    def test_item_stock_ledger_view(self):
+        url = reverse("admin:erp_item_stock_ledger", args=[self.item.id])
+        response = self.client.get(url, {"from": "2026-05-01", "to": "2026-05-31"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Widget Pro")
+        self.assertContains(response, "INV-REP-001")
+
+    def test_item_sales_register_view(self):
+        url = reverse("admin:erp_item_sales_register")
+        response = self.client.get(url, {"from": "2026-05-01", "to": "2026-05-31"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Widget Pro")
+        self.assertContains(response, "INV-REP-001")
+
+    def test_sales_analysis_view(self):
+        url = reverse("admin:erp_sale_analysis")
+        response = self.client.get(url, {"from": "2026-05-01", "to": "2026-05-31"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Widget Pro")
+        self.assertContains(response, "Customer Alpha")
+        self.assertContains(response, "Item-wise Sales Analysis")
+
+    def test_purchase_analysis_view(self):
+        url = reverse("admin:erp_purchase_analysis")
+        response = self.client.get(url, {"from": "2026-05-01", "to": "2026-05-31"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Purchase Analysis")
+
 

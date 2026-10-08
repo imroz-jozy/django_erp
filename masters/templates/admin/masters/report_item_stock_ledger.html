@@ -1,0 +1,129 @@
+{% extends "admin/masters/report_base.html" %}
+
+{% block report_title %}
+  {% if item %}Item Stock Ledger — {{ item.item_name }}{% else %}Item Stock Ledger (Movement){% endif %}
+{% endblock %}
+
+{% block report_subtitle_extra %}
+  {% if item %} | Group: <strong>{{ item.item_group|default:"General" }}</strong> | Unit: <strong>{{ item.main_unit.name|default:"-" }}</strong>{% if item.hsn %} | HSN: <strong>{{ item.hsn }}</strong>{% endif %}{% endif %}
+{% endblock %}
+
+{% block report_filters %}
+  <div class="erp-field-item" style="min-width: 280px;">
+    <label>Select Item *</label>
+    <select name="item" class="erp-combobox" data-placeholder="Search Item..." required>
+      <option value="">-- Choose Stock Item --</option>
+      {% for itm in all_items %}
+      <option value="{{ itm.id }}" data-sub="{{ itm.item_group|default:'General' }}"{% if item and item.id == itm.id %} selected{% elif not item and forloop.first %} selected{% endif %}>
+        {{ itm.item_name }} ({{ itm.main_unit.name|default:"-" }})
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+{% endblock %}
+
+{% block report_summary %}
+{% if data %}
+<div class="erp-kpi-grid">
+  <div class="erp-kpi-card tone-purple">
+    <div class="erp-kpi-label">Opening Stock</div>
+    <div class="erp-kpi-val">{{ data.opening_qty }} <small style="font-size:0.8rem;">{{ item.main_unit.name|default:"" }}</small></div>
+    <div class="erp-kpi-sub">&#8377; {{ data.opening_val }} (as of {{ date_from|date:"d M Y" }})</div>
+  </div>
+  <div class="erp-kpi-card tone-success">
+    <div class="erp-kpi-label">Total Inward (Purchases + Returns)</div>
+    <div class="erp-kpi-val" style="color:#16a34a;">+{{ data.period_in_qty }} <small style="font-size:0.8rem;">{{ item.main_unit.name|default:"" }}</small></div>
+    <div class="erp-kpi-sub">Total Value: &#8377; {{ data.period_in_val }}</div>
+  </div>
+  <div class="erp-kpi-card tone-warning">
+    <div class="erp-kpi-label">Total Outward (Sales + Returns)</div>
+    <div class="erp-kpi-val" style="color:#dc2626;">-{{ data.period_out_qty }} <small style="font-size:0.8rem;">{{ item.main_unit.name|default:"" }}</small></div>
+    <div class="erp-kpi-sub">Total Value: &#8377; {{ data.period_out_val }}</div>
+  </div>
+  <div class="erp-kpi-card tone-primary">
+    <div class="erp-kpi-label">Closing Stock Balance</div>
+    <div class="erp-kpi-val">{{ data.closing_qty }} <small style="font-size:0.8rem;">{{ item.main_unit.name|default:"" }}</small></div>
+    <div class="erp-kpi-sub">As of {{ date_to|date:"d M Y" }}</div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block report_body %}
+{% if data %}
+<div class="erp-report-scroll">
+  <table class="erp-report">
+    <thead>
+      <tr>
+        <th style="width:110px;">Date</th>
+        <th style="width:130px;">Voucher Type</th>
+        <th style="width:130px;">Voucher No</th>
+        <th style="min-width:220px;">Party / Account</th>
+        <th class="num" style="width:110px;">Inward Qty</th>
+        <th class="num" style="width:110px;">Outward Qty</th>
+        <th class="num" style="width:110px;">Rate (&#8377;)</th>
+        <th class="num" style="width:120px;">Amount (&#8377;)</th>
+        <th class="num" style="width:140px;">Running Stock</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="background:var(--darkened-bg, #f8fafc); font-weight:600;">
+        <td colspan="4"><strong>Opening Balance (as of {{ date_from|date:"d M Y" }})</strong></td>
+        <td class="num"></td>
+        <td class="num"></td>
+        <td class="num"></td>
+        <td class="num">&#8377; {{ data.opening_val }}</td>
+        <td class="num" style="color:#1e3a8a; font-weight:700;">{{ data.opening_qty }} {{ item.main_unit.name|default:"" }}</td>
+      </tr>
+
+      {% for row in data.rows %}
+      <tr>
+        <td>{{ row.date|date:"d-m-Y" }}</td>
+        <td>
+          <span class="badge {% if row.vtype == 'Purchase' or row.vtype == 'Sale Return' %}badge-success{% else %}badge-warning{% endif %}">
+            {{ row.vtype }}
+          </span>
+        </td>
+        <td>
+          {% if row.voucher_url %}
+            <a href="{{ row.voucher_url }}" title="Click to view/edit voucher"><strong>{{ row.voucher_no }}</strong></a>
+          {% else %}
+            <strong>{{ row.voucher_no }}</strong>
+          {% endif %}
+        </td>
+        <td>{{ row.party_name|default:"-" }}</td>
+        <td class="num" style="color:#16a34a; font-weight:600;">{% if row.inward_qty %}+{{ row.inward_qty }}{% endif %}</td>
+        <td class="num" style="color:#dc2626; font-weight:600;">{% if row.outward_qty %}-{{ row.outward_qty }}{% endif %}</td>
+        <td class="num">&#8377; {{ row.rate }}</td>
+        <td class="num">&#8377; {{ row.amount }}</td>
+        <td class="num" style="font-weight:700; color:#1e3a8a;">{{ row.balance_qty }} {{ item.main_unit.name|default:"" }}</td>
+      </tr>
+      {% empty %}
+      <tr class="erp-no-filter">
+        <td colspan="9" style="text-align:center; padding:24px; color:#94a3b8;">
+          No stock movements recorded for this item in the selected period.
+        </td>
+      </tr>
+      {% endfor %}
+
+      <tr class="total">
+        <td colspan="4">Total Movements &amp; Closing Stock</td>
+        <td class="num" style="color:#16a34a;">+{{ data.period_in_qty }}</td>
+        <td class="num" style="color:#dc2626;">-{{ data.period_out_qty }}</td>
+        <td></td>
+        <td class="num">&#8377; {{ data.period_in_val }}</td>
+        <td class="num" style="color:#1e3a8a; font-size:1.05rem; font-weight:700;">{{ data.closing_qty }} {{ item.main_unit.name|default:"" }}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div style="background:var(--body-bg, #fff); border:1px solid var(--border-color, #e2e8f0); border-radius:8px; padding:32px; text-align:center;">
+  <div style="font-size:2rem; margin-bottom:8px;">📦</div>
+  <h2 style="margin:0 0 8px; color:var(--body-fg, #334155);">Please Select a Stock Item</h2>
+  <p style="color:#64748b; margin:0 auto 16px; max-width:480px;">
+    Select an item from the searchable combobox above to view its detailed inward and outward stock ledger.
+  </p>
+</div>
+{% endif %}
+{% endblock %}
