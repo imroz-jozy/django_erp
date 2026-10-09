@@ -19,5 +19,7 @@
 
 {% block extrahead %}
 {{ block.super }}
+{# viewport-fit=cover enables env(safe-area-inset-bottom) on iOS Safari (notch / home-bar devices). #}
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <script src="{% static 'masters/js/erp_admin.js' %}" defer></script>
 {% endblock %}
