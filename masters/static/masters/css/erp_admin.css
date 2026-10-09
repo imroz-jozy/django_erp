@@ -524,7 +524,12 @@ fieldset.erp-totals-box .field-net_amount .readonly {
    ========================================================= */
 @media (max-width: 700px) {
   * { box-sizing: border-box; }
-  body { overflow-x: hidden; }
+  /* Use `clip` NOT `hidden` — `overflow: hidden` on body/html creates a scroll
+     context that can trap touch scroll on mobile, preventing the page from
+     scrolling past the fixed save-bar clearance. `clip` suppresses the
+     horizontal overflow without affecting the vertical scroll context. */
+  html { overflow-x: clip; }
+  body { overflow-x: clip; }
   .erp-hero { grid-template-columns: 1fr; }
   .erp-dashboard-columns { grid-template-columns: 1fr; }
   fieldset.erp-totals-box { max-width: none; }
@@ -620,20 +625,41 @@ fieldset.erp-totals-box .field-net_amount .readonly {
 
   .erp-report-wrap { overflow-x: auto; }
 
+  /* Submit row: stack all buttons in a single column so nothing wraps oddly */
   .submit-row {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 6px;
     left: 0 !important;
+    right: 0;
     bottom: 0;
-    /* Push bar above the device's home indicator / browser chrome */
-    padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
-    padding-left: 10px;
-    padding-right: 10px;
+    padding: 10px 10px calc(10px + env(safe-area-inset-bottom, 0px));
   }
-  /* Enough bottom clearance so the fixed bar never hides the last field */
-  #content { padding-bottom: calc(90px + env(safe-area-inset-bottom, 0px)); }
+  /* Each button takes the full width on mobile */
+  .submit-row input,
+  .submit-row a {
+    width: 100%;
+    text-align: center;
+    box-sizing: border-box;
+  }
+  /* ---- Bottom clearance so fixed save bar never hides the last field ----
+     Applied to every candidate scroll container: mobile browsers differ in
+     which element becomes the scrollport with Django's flex layout.
+     JS sets --submit-row-h to the real bar height; 250px fallback covers
+     3 stacked full-width buttons on any phone.                             */
+  html,
+  body {
+    padding-bottom: calc(var(--submit-row-h, 250px) + env(safe-area-inset-bottom, 0px) + 16px) !important;
+  }
+  #content,
+  #content-main {
+    padding-bottom: calc(var(--submit-row-h, 250px) + env(safe-area-inset-bottom, 0px) + 16px);
+  }
+  #content-main > form {
+    margin-bottom: calc(var(--submit-row-h, 250px) + env(safe-area-inset-bottom, 0px) + 16px);
+  }
 }
+
 
 /* =========================================================
    Mobile sidebar drawer (phones & small tablets ≤ 767px)
@@ -641,14 +667,15 @@ fieldset.erp-totals-box .field-net_amount .readonly {
 @media (max-width: 767px) {
 
   /* --- Hamburger FAB button --- */
-  /* Sit above the fixed submit-row (≈56px) + safe area + a small gap */
+  /* JS sets --submit-row-h so the FAB always floats above the save bar */
   #erp-mobile-nav-toggle {
     display: flex;
     align-items: center;
     justify-content: center;
     position: fixed;
-    bottom: calc(64px + env(safe-area-inset-bottom, 0px));
-    left: 16px;
+    bottom: calc(var(--submit-row-h, 180px) + env(safe-area-inset-bottom, 0px) + 12px);
+    right: 16px;
+    left: auto;
     z-index: 1100;
     width: 48px;
     height: 48px;
