@@ -1,0 +1,159 @@
+{% extends "admin/masters/report_base.html" %}
+
+{% block report_title %}Outstanding Receivable &amp; Payable{% endblock %}
+{% block report_subtitle_extra %} | Outstanding as on <strong>{{ as_on|date:"d M Y" }}</strong> (uses the "To Date"){% endblock %}
+
+{% block report_filters %}
+  <div class="erp-field-item" style="min-width: 260px;">
+    <label>Party</label>
+    <select name="account" class="erp-combobox" data-placeholder="All Parties">
+      <option value="">All Customers &amp; Suppliers</option>
+      {% for p in party_choices %}
+      <option value="{{ p.id }}" data-sub="{{ p.account_group.name }}"{% if selected_account_id == p.id %} selected{% endif %}>{{ p.account_name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+{% endblock %}
+
+{% block report_summary %}
+<div class="erp-kpi-grid">
+  <div class="erp-kpi-card tone-success">
+    <div class="erp-kpi-label">Amount Receivable</div>
+    <div class="erp-kpi-val">&#8377; {{ total_receivable }}</div>
+    <div class="erp-kpi-sub">{{ receivable_rows|length }} customers owe you</div>
+  </div>
+  <div class="erp-kpi-card tone-danger">
+    <div class="erp-kpi-label">Amount Payable</div>
+    <div class="erp-kpi-val">&#8377; {{ total_payable }}</div>
+    <div class="erp-kpi-sub">{{ payable_rows|length }} suppliers to be paid</div>
+  </div>
+  <div class="erp-kpi-card tone-primary">
+    <div class="erp-kpi-label">{{ net_label }}</div>
+    <div class="erp-kpi-val">&#8377; {{ net_position }}</div>
+    <div class="erp-kpi-sub">Receivable minus Payable</div>
+  </div>
+  <div class="erp-kpi-card tone-warning">
+    <div class="erp-kpi-label">Advances (not netted)</div>
+    <div class="erp-kpi-val" style="font-size:1rem;">From customers: &#8377; {{ total_receivable_advance }}</div>
+    <div class="erp-kpi-sub">To suppliers: &#8377; {{ total_payable_advance }}</div>
+  </div>
+</div>
+{% endblock %}
+
+{% block report_body %}
+<div class="erp-tabs-nav">
+  <button type="button" class="erp-tab-btn active" data-tab="tab-receivable">📥 Receivable (from Customers)</button>
+  <button type="button" class="erp-tab-btn" data-tab="tab-payable">📤 Payable (to Suppliers)</button>
+  <button type="button" class="erp-tab-btn" data-tab="tab-advances">↩️ Advances / Opposite Balances</button>
+</div>
+
+<div id="tab-receivable" class="erp-tab-content active">
+  <div class="erp-report-scroll">
+    <table class="erp-report">
+      <thead>
+        <tr>
+          <th style="min-width:220px;">Customer</th>
+          <th>Mobile</th>
+          {% for l in bucket_labels %}<th class="num">{{ l }} (&#8377;)</th>{% endfor %}
+          <th class="num">Oldest (days)</th>
+          <th class="num">Total Receivable (&#8377;)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in receivable_rows %}
+        <tr>
+          <td><a href="{% url 'admin:erp_ledger' row.account.id %}?from={{ date_from|date:'Y-m-d' }}&amp;to={{ as_on|date:'Y-m-d' }}"><strong>{{ row.party_name }}</strong></a></td>
+          <td>{{ row.mobile }}</td>
+          {% for b in row.buckets %}<td class="num">{{ b }}</td>{% endfor %}
+          <td class="num">{% if row.oldest_days != None %}{{ row.oldest_days }}{% else %}-{% endif %}</td>
+          <td class="num" style="font-weight:700; color:#047857;">&#8377; {{ row.amount }}</td>
+        </tr>
+        {% empty %}
+        <tr class="erp-no-filter"><td colspan="8" style="text-align:center; padding:24px; color:#94a3b8;">No receivable balances.</td></tr>
+        {% endfor %}
+        <tr class="total">
+          <td colspan="2">Total ({{ receivable_rows|length }} Customers)</td>
+          {% for b in receivable_bucket_totals %}<td class="num">{{ b }}</td>{% endfor %}
+          <td></td>
+          <td class="num">&#8377; {{ total_receivable }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div id="tab-payable" class="erp-tab-content">
+  <div class="erp-report-scroll">
+    <table class="erp-report">
+      <thead>
+        <tr>
+          <th style="min-width:220px;">Supplier</th>
+          <th>Mobile</th>
+          {% for l in bucket_labels %}<th class="num">{{ l }} (&#8377;)</th>{% endfor %}
+          <th class="num">Oldest (days)</th>
+          <th class="num">Total Payable (&#8377;)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in payable_rows %}
+        <tr>
+          <td><a href="{% url 'admin:erp_ledger' row.account.id %}?from={{ date_from|date:'Y-m-d' }}&amp;to={{ as_on|date:'Y-m-d' }}"><strong>{{ row.party_name }}</strong></a></td>
+          <td>{{ row.mobile }}</td>
+          {% for b in row.buckets %}<td class="num">{{ b }}</td>{% endfor %}
+          <td class="num">{% if row.oldest_days != None %}{{ row.oldest_days }}{% else %}-{% endif %}</td>
+          <td class="num" style="font-weight:700; color:#b91c1c;">&#8377; {{ row.amount }}</td>
+        </tr>
+        {% empty %}
+        <tr class="erp-no-filter"><td colspan="8" style="text-align:center; padding:24px; color:#94a3b8;">No payable balances.</td></tr>
+        {% endfor %}
+        <tr class="total">
+          <td colspan="2">Total ({{ payable_rows|length }} Suppliers)</td>
+          {% for b in payable_bucket_totals %}<td class="num">{{ b }}</td>{% endfor %}
+          <td></td>
+          <td class="num">&#8377; {{ total_payable }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div id="tab-advances" class="erp-tab-content">
+  <div class="erp-report-scroll">
+    <table class="erp-report">
+      <thead>
+        <tr>
+          <th style="min-width:220px;">Party</th>
+          <th>Type</th>
+          <th>Balance</th>
+          <th class="num">Amount (&#8377;)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in receivable_advance_rows %}
+        <tr>
+          <td><a href="{% url 'admin:erp_ledger' row.account.id %}?to={{ as_on|date:'Y-m-d' }}"><strong>{{ row.party_name }}</strong></a></td>
+          <td>Customer advance (you owe customer)</td>
+          <td>{{ row.dr_cr }}</td>
+          <td class="num">&#8377; {{ row.amount }}</td>
+        </tr>
+        {% endfor %}
+        {% for row in payable_advance_rows %}
+        <tr>
+          <td><a href="{% url 'admin:erp_ledger' row.account.id %}?to={{ as_on|date:'Y-m-d' }}"><strong>{{ row.party_name }}</strong></a></td>
+          <td>Supplier advance (supplier owes you)</td>
+          <td>{{ row.dr_cr }}</td>
+          <td class="num">&#8377; {{ row.amount }}</td>
+        </tr>
+        {% empty %}
+        {% if not receivable_advance_rows %}
+        <tr class="erp-no-filter"><td colspan="4" style="text-align:center; padding:24px; color:#94a3b8;">No advances or opposite balances.</td></tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p style="font-size:0.8rem; color:#64748b; margin-top:8px;">
+    Ageing is calculated first-in-first-out (receipts/payments settle the oldest invoices first), because bills are not allocated individually. Opening balances are shown under "Over 90 days".
+  </p>
+</div>
+{% endblock %}

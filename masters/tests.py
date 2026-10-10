@@ -577,3 +577,38 @@ class NewReportsPartitionTestCase(TestCase):
         self.assertContains(response, "Purchase Analysis")
 
 
+class OutstandingReportTestCase(TestCase):
+    def setUp(self):
+        from masters.models import Account, AccountGroup, Receipt, ReceiptLine, Payment, PaymentLine
+        debtors, _ = AccountGroup.objects.get_or_create(
+            name="Sundry Debtors", defaults={"primary_group": False, "nature": AccountGroup.Nature.ASSET})
+        creditors, _ = AccountGroup.objects.get_or_create(
+            name="Sundry Creditors", defaults={"primary_group": False, "nature": AccountGroup.Nature.LIABILITY})
+        cash, _ = AccountGroup.objects.get_or_create(
+            name="Cash-in-hand", defaults={"primary_group": False, "nature": AccountGroup.Nature.ASSET})
+        self.cust = Account.objects.create(
+            account_name="OS Customer", account_group=debtors, opening=Decimal("1000.00"), opening_type="DR")
+        self.supp = Account.objects.create(
+            account_name="OS Supplier", account_group=creditors, opening=Decimal("500.00"), opening_type="CR")
+        self.cash = Account.objects.create(account_name="OS Cash", account_group=cash)
+        r = Receipt.objects.create(date=date(2026, 5, 10), through=self.cash)
+        ReceiptLine.objects.create(receipt=r, account=self.cust, amount=Decimal("300.00"))
+        p = Payment.objects.create(date=date(2026, 5, 11), through=self.cash)
+        PaymentLine.objects.create(payment=p, account=self.supp, amount=Decimal("100.00"))
+        user = get_user_model().objects.create_superuser("osadmin", "a@a.com", "pw")
+        self.client = Client()
+        self.client.force_login(user)
+
+    def test_outstanding_totals(self):
+        from masters.reports import outstanding_report
+        data = outstanding_report(date(2026, 5, 31))
+        self.assertEqual(data["total_receivable"], Decimal("700.00"))
+        self.assertEqual(data["total_payable"], Decimal("400.00"))
+        self.assertEqual(data["net_position"], Decimal("300.00"))
+        self.assertEqual(sum(data["receivable_rows"][0]["buckets"]), Decimal("700.00"))
+
+    def test_outstanding_view(self):
+        response = self.client.get(reverse("admin:erp_outstanding"), {"from": "2026-04-01", "to": "2026-05-31"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "OS Customer")
+        self.assertContains(response, "OS Supplier")

@@ -1,0 +1,538 @@
+diff -uN -r -x __pycache__ a/masters/admin.py b/masters/admin.py
+--- a/masters/admin.py	2026-10-10 02:48:24.121885066 +0000
++++ b/masters/admin.py	2026-10-10 02:48:24.126495680 +0000
+@@ -101,6 +101,7 @@
+     item_purchase_return_register,
+     sales_analysis,
+     purchase_analysis,
++    outstanding_report,
+     trial_balance,
+ )
+ 
+@@ -786,6 +787,22 @@
+     )
+ 
+ 
++def outstanding_view(request):
++    """Outstanding receivable / payable as on the 'To Date' of the filter."""
++    _, as_on = period_from_request(request)
++    account_id = request.GET.get("account") or None
++    data = outstanding_report(as_on, account_id=account_id)
++    ctx = {
++        **data,
++        "selected_account_id": int(account_id) if account_id else None,
++    }
++    return TemplateResponse(
++        request,
++        "admin/masters/report_outstanding.html",
++        _report_context(request, "Outstanding Receivable & Payable", ctx),
++    )
++
++
+ def purchase_analysis_view(request):
+     date_from, date_to = period_from_request(request)
+     item_id = request.GET.get("item") or None
+@@ -1533,6 +1550,11 @@
+                 name="erp_purchase_analysis",
+             ),
+             path(
++                "reports/outstanding/",
++                admin.site.admin_view(outstanding_view),
++                name="erp_outstanding",
++            ),
++            path(
+                 "reports/profit-loss/",
+                 admin.site.admin_view(profit_loss_view),
+                 name="erp_profit_loss",
+diff -uN -r -x __pycache__ a/masters/reports.py b/masters/reports.py
+--- a/masters/reports.py	2026-10-10 02:48:24.122649476 +0000
++++ b/masters/reports.py	2026-10-10 02:48:24.127289781 +0000
+@@ -2000,7 +2000,7 @@
+         tot_qty += line.total_quantity
+         tot_basic += line_amts["amount_after_discount"]
+         tot_tax += line_amts["tax_amount"]
+-        tot_net += line_amts["line_total"]
++        tot_net += line_amts["net_amount"]
+ 
+         rows.append({
+             "date": sale.date,
+@@ -2021,7 +2021,7 @@
+             "taxable_amount": line_amts["amount_after_discount"],
+             "tax_rate": line.tax_rate,
+             "tax_amount": line_amts["tax_amount"],
+-            "net_amount": line_amts["line_total"],
++            "net_amount": line_amts["net_amount"],
+         })
+ 
+     rows.sort(key=lambda r: (r["date"], str(r["voucher_no"])))
+@@ -2060,7 +2060,7 @@
+         tot_qty += line.total_quantity
+         tot_basic += line_amts["amount_after_discount"]
+         tot_tax += line_amts["tax_amount"]
+-        tot_net += line_amts["line_total"]
++        tot_net += line_amts["net_amount"]
+ 
+         rows.append({
+             "date": purchase.date,
+@@ -2081,7 +2081,7 @@
+             "taxable_amount": line_amts["amount_after_discount"],
+             "tax_rate": line.tax_rate,
+             "tax_amount": line_amts["tax_amount"],
+-            "net_amount": line_amts["line_total"],
++            "net_amount": line_amts["net_amount"],
+         })
+ 
+     rows.sort(key=lambda r: (r["date"], str(r["voucher_no"])))
+@@ -2119,7 +2119,7 @@
+         tot_qty += line.total_quantity
+         tot_basic += line_amts["amount_after_discount"]
+         tot_tax += line_amts["tax_amount"]
+-        tot_net += line_amts["line_total"]
++        tot_net += line_amts["net_amount"]
+ 
+         rows.append({
+             "date": sr.date,
+@@ -2137,7 +2137,7 @@
+             "price": line.price,
+             "taxable_amount": line_amts["amount_after_discount"],
+             "tax_amount": line_amts["tax_amount"],
+-            "net_amount": line_amts["line_total"],
++            "net_amount": line_amts["net_amount"],
+         })
+ 
+     rows.sort(key=lambda r: (r["date"], str(r["voucher_no"])))
+@@ -2175,7 +2175,7 @@
+         tot_qty += line.total_quantity
+         tot_basic += line_amts["amount_after_discount"]
+         tot_tax += line_amts["tax_amount"]
+-        tot_net += line_amts["line_total"]
++        tot_net += line_amts["net_amount"]
+ 
+         rows.append({
+             "date": pr.date,
+@@ -2193,7 +2193,7 @@
+             "price": line.price,
+             "taxable_amount": line_amts["amount_after_discount"],
+             "tax_amount": line_amts["tax_amount"],
+-            "net_amount": line_amts["line_total"],
++            "net_amount": line_amts["net_amount"],
+         })
+ 
+     rows.sort(key=lambda r: (r["date"], str(r["voucher_no"])))
+@@ -2252,7 +2252,7 @@
+ 
+         b_amt = line_amts["amount_after_discount"]
+         t_amt = line_amts["tax_amount"]
+-        n_amt = line_amts["line_total"]
++        n_amt = line_amts["net_amount"]
+         q = line.total_quantity
+ 
+         total_basic += b_amt
+@@ -2425,7 +2425,7 @@
+ 
+         b_amt = line_amts["amount_after_discount"]
+         t_amt = line_amts["tax_amount"]
+-        n_amt = line_amts["line_total"]
++        n_amt = line_amts["net_amount"]
+         q = line.total_quantity
+ 
+         total_basic += b_amt
+@@ -2551,3 +2551,156 @@
+         "top_party": party_rows[0] if party_rows else None,
+     }
+ 
++
++# =========================================================
++# OUTSTANDING (RECEIVABLE / PAYABLE)
++# =========================================================
++
++OUTSTANDING_BUCKET_LABELS = ["0-30 days", "31-60 days", "61-90 days", "Over 90 days"]
++_OUTSTANDING_SINCE = date(1900, 1, 1)
++
++
++def _party_side(group_map, group_id):
++    """Return "R" if the group sits under Sundry Debtors, "P" if under
++    Sundry Creditors, otherwise None."""
++    seen = set()
++    while group_id and group_id not in seen and group_id in group_map:
++        seen.add(group_id)
++        name, parent_id = group_map[group_id]
++        lowered = (name or "").strip().lower()
++        if lowered == "sundry debtors":
++            return "R"
++        if lowered == "sundry creditors":
++            return "P"
++        group_id = parent_id
++    return None
++
++
++def _fifo_ageing(account, as_on, sign):
++    """Age a party's closing balance first-in-first-out.
++
++    The ERP has no bill-by-bill allocation, so receipts/payments are assumed
++    to settle the oldest invoices first. ``sign`` is +1 for a debit-side
++    (receivable) balance and -1 for a credit-side (payable) balance.
++    Returns (bucket_amounts[4], oldest_age_in_days_or_None).
++    """
++    events = [(None, money(account.opening_signed()) * sign)]
++    for entry in _voucher_entries_for_account(account):
++        if entry["date"] > as_on:
++            continue
++        events.append((entry["date"], (entry["debit"] - entry["credit"]) * sign))
++
++    open_items = []  # [date_or_None, amount]
++    pool = ZERO      # unmatched settlements waiting for a later invoice
++    for when, amt in events:
++        if amt > 0:
++            if pool > 0:
++                used = min(pool, amt)
++                pool -= used
++                amt -= used
++            if amt > 0:
++                open_items.append([when, amt])
++        elif amt < 0:
++            need = -amt
++            while need > 0 and open_items:
++                take = min(need, open_items[0][1])
++                open_items[0][1] -= take
++                need -= take
++                if open_items[0][1] <= 0:
++                    open_items.pop(0)
++            pool += need
++
++    buckets = [ZERO, ZERO, ZERO, ZERO]
++    oldest = None
++    for when, amt in open_items:
++        age = (as_on - when).days if when else None
++        if age is None:
++            idx = 3  # opening balance: date unknown, treated as oldest
++        elif age <= 30:
++            idx = 0
++        elif age <= 60:
++            idx = 1
++        elif age <= 90:
++            idx = 2
++        else:
++            idx = 3
++        buckets[idx] += amt
++        if age is not None and (oldest is None or age > oldest):
++            oldest = age
++    return [money(b) for b in buckets], oldest
++
++
++def outstanding_report(as_on, account_id=None):
++    """Amount receivable (Sundry Debtors) and payable (Sundry Creditors)
++    as on ``as_on``, with FIFO ageing.
++
++    Debtors with a debit balance are receivable; creditors with a credit
++    balance are payable. The opposite balances (customer advances / supplier
++    advances) are reported separately instead of being netted off silently.
++    """
++    rows = build_ledgers(_OUTSTANDING_SINCE, as_on)
++    group_map = {g.id: (g.name, g.under_group_id) for g in AccountGroup.objects.all()}
++
++    receivable, payable, rec_adv, pay_adv, party_choices = [], [], [], [], []
++    for row in rows:
++        acc = row["account"]
++        side = _party_side(group_map, acc.account_group_id)
++        if side is None:
++            continue
++        party_choices.append(acc)
++        if account_id and str(acc.id) != str(account_id):
++            continue
++        bal = row["balance"]  # Dr positive, Cr negative
++        if bal == 0:
++            continue
++
++        item = {
++            "account": acc,
++            "party_name": acc.account_name,
++            "mobile": acc.mobile_no,
++            "state": acc.state,
++            "amount": abs(bal),
++            "dr_cr": "Dr" if bal > 0 else "Cr",
++            "buckets": None,
++            "oldest_days": None,
++        }
++        if side == "R" and bal > 0:
++            item["buckets"], item["oldest_days"] = _fifo_ageing(acc, as_on, 1)
++            receivable.append(item)
++        elif side == "P" and bal < 0:
++            item["buckets"], item["oldest_days"] = _fifo_ageing(acc, as_on, -1)
++            payable.append(item)
++        elif side == "R":
++            rec_adv.append(item)   # debtor with a credit balance
++        else:
++            pay_adv.append(item)   # creditor with a debit balance
++
++    for lst in (receivable, payable, rec_adv, pay_adv):
++        lst.sort(key=lambda r: r["amount"], reverse=True)
++
++    def _sum(lst):
++        return money(sum((r["amount"] for r in lst), ZERO))
++
++    def _bucket_totals(lst):
++        return [money(sum((r["buckets"][i] for r in lst), ZERO)) for i in range(4)]
++
++    total_receivable = _sum(receivable)
++    total_payable = _sum(payable)
++    net = money(total_receivable - total_payable)
++    return {
++        "as_on": as_on,
++        "bucket_labels": OUTSTANDING_BUCKET_LABELS,
++        "receivable_rows": receivable,
++        "payable_rows": payable,
++        "receivable_advance_rows": rec_adv,
++        "payable_advance_rows": pay_adv,
++        "total_receivable": total_receivable,
++        "total_payable": total_payable,
++        "total_receivable_advance": _sum(rec_adv),
++        "total_payable_advance": _sum(pay_adv),
++        "receivable_bucket_totals": _bucket_totals(receivable),
++        "payable_bucket_totals": _bucket_totals(payable),
++        "net_position": abs(net),
++        "net_label": "Net Receivable" if net >= 0 else "Net Payable",
++        "party_choices": party_choices,
++    }
+diff -uN -r -x __pycache__ a/masters/templates/admin/masters/report_hub.html b/masters/templates/admin/masters/report_hub.html
+--- a/masters/templates/admin/masters/report_hub.html	2026-10-10 02:48:24.124160141 +0000
++++ b/masters/templates/admin/masters/report_hub.html	2026-10-10 02:48:24.128507227 +0000
+@@ -486,6 +486,19 @@
+           <span>Open Sales Analysis &rarr;</span>
+         </div>
+       </a>
++
++      <a href="{% url 'admin:erp_outstanding' %}" class="erp-report-card">
++        <div class="erp-card-top">
++          <div class="erp-card-icon icon-amber">💰</div>
++          <div class="erp-card-content">
++            <h3>Outstanding Receivable &amp; Payable</h3>
++            <p>Party-wise amount to receive from customers and to pay to suppliers as on a date, with 30/60/90-day ageing.</p>
++          </div>
++        </div>
++        <div class="erp-card-footer">
++          <span>Open Outstanding Report &rarr;</span>
++        </div>
++      </a>
+     </div>
+   </div>
+ 
+diff -uN -r -x __pycache__ a/masters/templates/admin/masters/report_outstanding.html b/masters/templates/admin/masters/report_outstanding.html
+--- a/masters/templates/admin/masters/report_outstanding.html	1970-01-01 00:00:00.000000000 +0000
++++ b/masters/templates/admin/masters/report_outstanding.html	2026-10-10 02:48:24.128822595 +0000
+@@ -0,0 +1,159 @@
++{% extends "admin/masters/report_base.html" %}
++
++{% block report_title %}Outstanding Receivable &amp; Payable{% endblock %}
++{% block report_subtitle_extra %} | Outstanding as on <strong>{{ as_on|date:"d M Y" }}</strong> (uses the "To Date"){% endblock %}
++
++{% block report_filters %}
++  <div class="erp-field-item" style="min-width: 260px;">
++    <label>Party</label>
++    <select name="account" class="erp-combobox" data-placeholder="All Parties">
++      <option value="">All Customers &amp; Suppliers</option>
++      {% for p in party_choices %}
++      <option value="{{ p.id }}" data-sub="{{ p.account_group.name }}"{% if selected_account_id == p.id %} selected{% endif %}>{{ p.account_name }}</option>
++      {% endfor %}
++    </select>
++  </div>
++{% endblock %}
++
++{% block report_summary %}
++<div class="erp-kpi-grid">
++  <div class="erp-kpi-card tone-success">
++    <div class="erp-kpi-label">Amount Receivable</div>
++    <div class="erp-kpi-val">&#8377; {{ total_receivable }}</div>
++    <div class="erp-kpi-sub">{{ receivable_rows|length }} customers owe you</div>
++  </div>
++  <div class="erp-kpi-card tone-danger">
++    <div class="erp-kpi-label">Amount Payable</div>
++    <div class="erp-kpi-val">&#8377; {{ total_payable }}</div>
++    <div class="erp-kpi-sub">{{ payable_rows|length }} suppliers to be paid</div>
++  </div>
++  <div class="erp-kpi-card tone-primary">
++    <div class="erp-kpi-label">{{ net_label }}</div>
++    <div class="erp-kpi-val">&#8377; {{ net_position }}</div>
++    <div class="erp-kpi-sub">Receivable minus Payable</div>
++  </div>
++  <div class="erp-kpi-card tone-warning">
++    <div class="erp-kpi-label">Advances (not netted)</div>
++    <div class="erp-kpi-val" style="font-size:1rem;">From customers: &#8377; {{ total_receivable_advance }}</div>
++    <div class="erp-kpi-sub">To suppliers: &#8377; {{ total_payable_advance }}</div>
++  </div>
++</div>
++{% endblock %}
++
++{% block report_body %}
++<div class="erp-tabs-nav">
++  <button type="button" class="erp-tab-btn active" data-tab="tab-receivable">📥 Receivable (from Customers)</button>
++  <button type="button" class="erp-tab-btn" data-tab="tab-payable">📤 Payable (to Suppliers)</button>
++  <button type="button" class="erp-tab-btn" data-tab="tab-advances">↩️ Advances / Opposite Balances</button>
++</div>
++
++<div id="tab-receivable" class="erp-tab-content active">
++  <div class="erp-report-scroll">
++    <table class="erp-report">
++      <thead>
++        <tr>
++          <th style="min-width:220px;">Customer</th>
++          <th>Mobile</th>
++          {% for l in bucket_labels %}<th class="num">{{ l }} (&#8377;)</th>{% endfor %}
++          <th class="num">Oldest (days)</th>
++          <th class="num">Total Receivable (&#8377;)</th>
++        </tr>
++      </thead>
++      <tbody>
++        {% for row in receivable_rows %}
++        <tr>
++          <td><a href="{% url 'admin:erp_ledger' row.account.id %}?from={{ date_from|date:'Y-m-d' }}&amp;to={{ as_on|date:'Y-m-d' }}"><strong>{{ row.party_name }}</strong></a></td>
++          <td>{{ row.mobile }}</td>
++          {% for b in row.buckets %}<td class="num">{{ b }}</td>{% endfor %}
++          <td class="num">{% if row.oldest_days != None %}{{ row.oldest_days }}{% else %}-{% endif %}</td>
++          <td class="num" style="font-weight:700; color:#047857;">&#8377; {{ row.amount }}</td>
++        </tr>
++        {% empty %}
++        <tr class="erp-no-filter"><td colspan="8" style="text-align:center; padding:24px; color:#94a3b8;">No receivable balances.</td></tr>
++        {% endfor %}
++        <tr class="total">
++          <td colspan="2">Total ({{ receivable_rows|length }} Customers)</td>
++          {% for b in receivable_bucket_totals %}<td class="num">{{ b }}</td>{% endfor %}
++          <td></td>
++          <td class="num">&#8377; {{ total_receivable }}</td>
++        </tr>
++      </tbody>
++    </table>
++  </div>
++</div>
++
++<div id="tab-payable" class="erp-tab-content">
++  <div class="erp-report-scroll">
++    <table class="erp-report">
++      <thead>
++        <tr>
++          <th style="min-width:220px;">Supplier</th>
++          <th>Mobile</th>
++          {% for l in bucket_labels %}<th class="num">{{ l }} (&#8377;)</th>{% endfor %}
++          <th class="num">Oldest (days)</th>
++          <th class="num">Total Payable (&#8377;)</th>
++        </tr>
++      </thead>
++      <tbody>
++        {% for row in payable_rows %}
++        <tr>
++          <td><a href="{% url 'admin:erp_ledger' row.account.id %}?from={{ date_from|date:'Y-m-d' }}&amp;to={{ as_on|date:'Y-m-d' }}"><strong>{{ row.party_name }}</strong></a></td>
++          <td>{{ row.mobile }}</td>
++          {% for b in row.buckets %}<td class="num">{{ b }}</td>{% endfor %}
++          <td class="num">{% if row.oldest_days != None %}{{ row.oldest_days }}{% else %}-{% endif %}</td>
++          <td class="num" style="font-weight:700; color:#b91c1c;">&#8377; {{ row.amount }}</td>
++        </tr>
++        {% empty %}
++        <tr class="erp-no-filter"><td colspan="8" style="text-align:center; padding:24px; color:#94a3b8;">No payable balances.</td></tr>
++        {% endfor %}
++        <tr class="total">
++          <td colspan="2">Total ({{ payable_rows|length }} Suppliers)</td>
++          {% for b in payable_bucket_totals %}<td class="num">{{ b }}</td>{% endfor %}
++          <td></td>
++          <td class="num">&#8377; {{ total_payable }}</td>
++        </tr>
++      </tbody>
++    </table>
++  </div>
++</div>
++
++<div id="tab-advances" class="erp-tab-content">
++  <div class="erp-report-scroll">
++    <table class="erp-report">
++      <thead>
++        <tr>
++          <th style="min-width:220px;">Party</th>
++          <th>Type</th>
++          <th>Balance</th>
++          <th class="num">Amount (&#8377;)</th>
++        </tr>
++      </thead>
++      <tbody>
++        {% for row in receivable_advance_rows %}
++        <tr>
++          <td><a href="{% url 'admin:erp_ledger' row.account.id %}?to={{ as_on|date:'Y-m-d' }}"><strong>{{ row.party_name }}</strong></a></td>
++          <td>Customer advance (you owe customer)</td>
++          <td>{{ row.dr_cr }}</td>
++          <td class="num">&#8377; {{ row.amount }}</td>
++        </tr>
++        {% endfor %}
++        {% for row in payable_advance_rows %}
++        <tr>
++          <td><a href="{% url 'admin:erp_ledger' row.account.id %}?to={{ as_on|date:'Y-m-d' }}"><strong>{{ row.party_name }}</strong></a></td>
++          <td>Supplier advance (supplier owes you)</td>
++          <td>{{ row.dr_cr }}</td>
++          <td class="num">&#8377; {{ row.amount }}</td>
++        </tr>
++        {% empty %}
++        {% if not receivable_advance_rows %}
++        <tr class="erp-no-filter"><td colspan="4" style="text-align:center; padding:24px; color:#94a3b8;">No advances or opposite balances.</td></tr>
++        {% endif %}
++        {% endfor %}
++      </tbody>
++    </table>
++  </div>
++  <p style="font-size:0.8rem; color:#64748b; margin-top:8px;">
++    Ageing is calculated first-in-first-out (receipts/payments settle the oldest invoices first), because bills are not allocated individually. Opening balances are shown under "Over 90 days".
++  </p>
++</div>
++{% endblock %}
+diff -uN -r -x __pycache__ a/masters/templates/admin/nav_sidebar.html b/masters/templates/admin/nav_sidebar.html
+--- a/masters/templates/admin/nav_sidebar.html	2026-10-10 02:48:24.124468389 +0000
++++ b/masters/templates/admin/nav_sidebar.html	2026-10-10 02:48:24.128849077 +0000
+@@ -203,6 +203,10 @@
+       <svg class="erp-nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6"><line x1="3" y1="15.5" x2="3" y2="6"/><line x1="9" y1="15.5" x2="9" y2="2.5"/><line x1="15" y1="15.5" x2="15" y2="9.5"/><line x1="1.5" y1="15.5" x2="16.5" y2="15.5"/></svg>
+       <span>Purchase Analysis</span>
+     </a>
++    <a class="erp-nav-link{% if '/reports/outstanding/' in request.path %} is-active{% endif %}" href="{% url 'admin:erp_outstanding' %}">
++      <svg class="erp-nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="9" cy="9" r="7"/><path d="M9 4.5v9M6.5 7.5h4a1.5 1.5 0 0 1 0 3h-3a1.5 1.5 0 0 0 0 3h4"/></svg>
++      <span>Outstanding (Rec./Pay.)</span>
++    </a>
+     <a class="erp-nav-link" href="{% url 'admin:erp_reports_hub' %}">
+       <svg class="erp-nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1.5" y="1.5" width="6.5" height="6.5" rx="1.2"/><rect x="10" y="1.5" width="6.5" height="6.5" rx="1.2"/><rect x="1.5" y="10" width="6.5" height="6.5" rx="1.2"/><rect x="10" y="10" width="6.5" height="6.5" rx="1.2"/></svg>
+       <span>All Reports Center</span>
+diff -uN -r -x __pycache__ a/masters/tests.py b/masters/tests.py
+--- a/masters/tests.py	2026-10-10 02:48:24.124588434 +0000
++++ b/masters/tests.py	2026-10-10 02:48:24.129020255 +0000
+@@ -577,3 +577,38 @@
+         self.assertContains(response, "Purchase Analysis")
+ 
+ 
++class OutstandingReportTestCase(TestCase):
++    def setUp(self):
++        from masters.models import Account, AccountGroup, Receipt, ReceiptLine, Payment, PaymentLine
++        debtors, _ = AccountGroup.objects.get_or_create(
++            name="Sundry Debtors", defaults={"primary_group": False, "nature": AccountGroup.Nature.ASSET})
++        creditors, _ = AccountGroup.objects.get_or_create(
++            name="Sundry Creditors", defaults={"primary_group": False, "nature": AccountGroup.Nature.LIABILITY})
++        cash, _ = AccountGroup.objects.get_or_create(
++            name="Cash-in-hand", defaults={"primary_group": False, "nature": AccountGroup.Nature.ASSET})
++        self.cust = Account.objects.create(
++            account_name="OS Customer", account_group=debtors, opening=Decimal("1000.00"), opening_type="DR")
++        self.supp = Account.objects.create(
++            account_name="OS Supplier", account_group=creditors, opening=Decimal("500.00"), opening_type="CR")
++        self.cash = Account.objects.create(account_name="OS Cash", account_group=cash)
++        r = Receipt.objects.create(date=date(2026, 5, 10), through=self.cash)
++        ReceiptLine.objects.create(receipt=r, account=self.cust, amount=Decimal("300.00"))
++        p = Payment.objects.create(date=date(2026, 5, 11), through=self.cash)
++        PaymentLine.objects.create(payment=p, account=self.supp, amount=Decimal("100.00"))
++        user = get_user_model().objects.create_superuser("osadmin", "a@a.com", "pw")
++        self.client = Client()
++        self.client.force_login(user)
++
++    def test_outstanding_totals(self):
++        from masters.reports import outstanding_report
++        data = outstanding_report(date(2026, 5, 31))
++        self.assertEqual(data["total_receivable"], Decimal("700.00"))
++        self.assertEqual(data["total_payable"], Decimal("400.00"))
++        self.assertEqual(data["net_position"], Decimal("300.00"))
++        self.assertEqual(sum(data["receivable_rows"][0]["buckets"]), Decimal("700.00"))
++
++    def test_outstanding_view(self):
++        response = self.client.get(reverse("admin:erp_outstanding"), {"from": "2026-04-01", "to": "2026-05-31"})
++        self.assertEqual(response.status_code, 200)
++        self.assertContains(response, "OS Customer")
++        self.assertContains(response, "OS Supplier")

@@ -101,6 +101,7 @@ from .reports import (
     item_purchase_return_register,
     sales_analysis,
     purchase_analysis,
+    outstanding_report,
     trial_balance,
 )
 
@@ -783,6 +784,22 @@ def sale_analysis_view(request):
         request,
         "admin/masters/report_sale_analysis.html",
         _report_context(request, "Sales Analysis", ctx),
+    )
+
+
+def outstanding_view(request):
+    """Outstanding receivable / payable as on the 'To Date' of the filter."""
+    _, as_on = period_from_request(request)
+    account_id = request.GET.get("account") or None
+    data = outstanding_report(as_on, account_id=account_id)
+    ctx = {
+        **data,
+        "selected_account_id": int(account_id) if account_id else None,
+    }
+    return TemplateResponse(
+        request,
+        "admin/masters/report_outstanding.html",
+        _report_context(request, "Outstanding Receivable & Payable", ctx),
     )
 
 
@@ -1531,6 +1548,11 @@ if not getattr(admin.site, "_erp_urls_patched", False):
                 "reports/purchase-analysis/",
                 admin.site.admin_view(purchase_analysis_view),
                 name="erp_purchase_analysis",
+            ),
+            path(
+                "reports/outstanding/",
+                admin.site.admin_view(outstanding_view),
+                name="erp_outstanding",
             ),
             path(
                 "reports/profit-loss/",

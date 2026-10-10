@@ -2000,7 +2000,7 @@ def item_sales_register(date_from, date_to, item_id=None, account_id=None, group
         tot_qty += line.total_quantity
         tot_basic += line_amts["amount_after_discount"]
         tot_tax += line_amts["tax_amount"]
-        tot_net += line_amts["line_total"]
+        tot_net += line_amts["net_amount"]
 
         rows.append({
             "date": sale.date,
@@ -2021,7 +2021,7 @@ def item_sales_register(date_from, date_to, item_id=None, account_id=None, group
             "taxable_amount": line_amts["amount_after_discount"],
             "tax_rate": line.tax_rate,
             "tax_amount": line_amts["tax_amount"],
-            "net_amount": line_amts["line_total"],
+            "net_amount": line_amts["net_amount"],
         })
 
     rows.sort(key=lambda r: (r["date"], str(r["voucher_no"])))
@@ -2060,7 +2060,7 @@ def item_purchase_register(date_from, date_to, item_id=None, account_id=None, gr
         tot_qty += line.total_quantity
         tot_basic += line_amts["amount_after_discount"]
         tot_tax += line_amts["tax_amount"]
-        tot_net += line_amts["line_total"]
+        tot_net += line_amts["net_amount"]
 
         rows.append({
             "date": purchase.date,
@@ -2081,7 +2081,7 @@ def item_purchase_register(date_from, date_to, item_id=None, account_id=None, gr
             "taxable_amount": line_amts["amount_after_discount"],
             "tax_rate": line.tax_rate,
             "tax_amount": line_amts["tax_amount"],
-            "net_amount": line_amts["line_total"],
+            "net_amount": line_amts["net_amount"],
         })
 
     rows.sort(key=lambda r: (r["date"], str(r["voucher_no"])))
@@ -2119,7 +2119,7 @@ def item_sale_return_register(date_from, date_to, item_id=None, account_id=None,
         tot_qty += line.total_quantity
         tot_basic += line_amts["amount_after_discount"]
         tot_tax += line_amts["tax_amount"]
-        tot_net += line_amts["line_total"]
+        tot_net += line_amts["net_amount"]
 
         rows.append({
             "date": sr.date,
@@ -2137,7 +2137,7 @@ def item_sale_return_register(date_from, date_to, item_id=None, account_id=None,
             "price": line.price,
             "taxable_amount": line_amts["amount_after_discount"],
             "tax_amount": line_amts["tax_amount"],
-            "net_amount": line_amts["line_total"],
+            "net_amount": line_amts["net_amount"],
         })
 
     rows.sort(key=lambda r: (r["date"], str(r["voucher_no"])))
@@ -2175,7 +2175,7 @@ def item_purchase_return_register(date_from, date_to, item_id=None, account_id=N
         tot_qty += line.total_quantity
         tot_basic += line_amts["amount_after_discount"]
         tot_tax += line_amts["tax_amount"]
-        tot_net += line_amts["line_total"]
+        tot_net += line_amts["net_amount"]
 
         rows.append({
             "date": pr.date,
@@ -2193,7 +2193,7 @@ def item_purchase_return_register(date_from, date_to, item_id=None, account_id=N
             "price": line.price,
             "taxable_amount": line_amts["amount_after_discount"],
             "tax_amount": line_amts["tax_amount"],
-            "net_amount": line_amts["line_total"],
+            "net_amount": line_amts["net_amount"],
         })
 
     rows.sort(key=lambda r: (r["date"], str(r["voucher_no"])))
@@ -2252,7 +2252,7 @@ def sales_analysis(date_from, date_to, item_id=None, account_id=None, group=None
 
         b_amt = line_amts["amount_after_discount"]
         t_amt = line_amts["tax_amount"]
-        n_amt = line_amts["line_total"]
+        n_amt = line_amts["net_amount"]
         q = line.total_quantity
 
         total_basic += b_amt
@@ -2425,7 +2425,7 @@ def purchase_analysis(date_from, date_to, item_id=None, account_id=None, group=N
 
         b_amt = line_amts["amount_after_discount"]
         t_amt = line_amts["tax_amount"]
-        n_amt = line_amts["line_total"]
+        n_amt = line_amts["net_amount"]
         q = line.total_quantity
 
         total_basic += b_amt
@@ -2551,3 +2551,156 @@ def purchase_analysis(date_from, date_to, item_id=None, account_id=None, group=N
         "top_party": party_rows[0] if party_rows else None,
     }
 
+
+# =========================================================
+# OUTSTANDING (RECEIVABLE / PAYABLE)
+# =========================================================
+
+OUTSTANDING_BUCKET_LABELS = ["0-30 days", "31-60 days", "61-90 days", "Over 90 days"]
+_OUTSTANDING_SINCE = date(1900, 1, 1)
+
+
+def _party_side(group_map, group_id):
+    """Return "R" if the group sits under Sundry Debtors, "P" if under
+    Sundry Creditors, otherwise None."""
+    seen = set()
+    while group_id and group_id not in seen and group_id in group_map:
+        seen.add(group_id)
+        name, parent_id = group_map[group_id]
+        lowered = (name or "").strip().lower()
+        if lowered == "sundry debtors":
+            return "R"
+        if lowered == "sundry creditors":
+            return "P"
+        group_id = parent_id
+    return None
+
+
+def _fifo_ageing(account, as_on, sign):
+    """Age a party's closing balance first-in-first-out.
+
+    The ERP has no bill-by-bill allocation, so receipts/payments are assumed
+    to settle the oldest invoices first. ``sign`` is +1 for a debit-side
+    (receivable) balance and -1 for a credit-side (payable) balance.
+    Returns (bucket_amounts[4], oldest_age_in_days_or_None).
+    """
+    events = [(None, money(account.opening_signed()) * sign)]
+    for entry in _voucher_entries_for_account(account):
+        if entry["date"] > as_on:
+            continue
+        events.append((entry["date"], (entry["debit"] - entry["credit"]) * sign))
+
+    open_items = []  # [date_or_None, amount]
+    pool = ZERO      # unmatched settlements waiting for a later invoice
+    for when, amt in events:
+        if amt > 0:
+            if pool > 0:
+                used = min(pool, amt)
+                pool -= used
+                amt -= used
+            if amt > 0:
+                open_items.append([when, amt])
+        elif amt < 0:
+            need = -amt
+            while need > 0 and open_items:
+                take = min(need, open_items[0][1])
+                open_items[0][1] -= take
+                need -= take
+                if open_items[0][1] <= 0:
+                    open_items.pop(0)
+            pool += need
+
+    buckets = [ZERO, ZERO, ZERO, ZERO]
+    oldest = None
+    for when, amt in open_items:
+        age = (as_on - when).days if when else None
+        if age is None:
+            idx = 3  # opening balance: date unknown, treated as oldest
+        elif age <= 30:
+            idx = 0
+        elif age <= 60:
+            idx = 1
+        elif age <= 90:
+            idx = 2
+        else:
+            idx = 3
+        buckets[idx] += amt
+        if age is not None and (oldest is None or age > oldest):
+            oldest = age
+    return [money(b) for b in buckets], oldest
+
+
+def outstanding_report(as_on, account_id=None):
+    """Amount receivable (Sundry Debtors) and payable (Sundry Creditors)
+    as on ``as_on``, with FIFO ageing.
+
+    Debtors with a debit balance are receivable; creditors with a credit
+    balance are payable. The opposite balances (customer advances / supplier
+    advances) are reported separately instead of being netted off silently.
+    """
+    rows = build_ledgers(_OUTSTANDING_SINCE, as_on)
+    group_map = {g.id: (g.name, g.under_group_id) for g in AccountGroup.objects.all()}
+
+    receivable, payable, rec_adv, pay_adv, party_choices = [], [], [], [], []
+    for row in rows:
+        acc = row["account"]
+        side = _party_side(group_map, acc.account_group_id)
+        if side is None:
+            continue
+        party_choices.append(acc)
+        if account_id and str(acc.id) != str(account_id):
+            continue
+        bal = row["balance"]  # Dr positive, Cr negative
+        if bal == 0:
+            continue
+
+        item = {
+            "account": acc,
+            "party_name": acc.account_name,
+            "mobile": acc.mobile_no,
+            "state": acc.state,
+            "amount": abs(bal),
+            "dr_cr": "Dr" if bal > 0 else "Cr",
+            "buckets": None,
+            "oldest_days": None,
+        }
+        if side == "R" and bal > 0:
+            item["buckets"], item["oldest_days"] = _fifo_ageing(acc, as_on, 1)
+            receivable.append(item)
+        elif side == "P" and bal < 0:
+            item["buckets"], item["oldest_days"] = _fifo_ageing(acc, as_on, -1)
+            payable.append(item)
+        elif side == "R":
+            rec_adv.append(item)   # debtor with a credit balance
+        else:
+            pay_adv.append(item)   # creditor with a debit balance
+
+    for lst in (receivable, payable, rec_adv, pay_adv):
+        lst.sort(key=lambda r: r["amount"], reverse=True)
+
+    def _sum(lst):
+        return money(sum((r["amount"] for r in lst), ZERO))
+
+    def _bucket_totals(lst):
+        return [money(sum((r["buckets"][i] for r in lst), ZERO)) for i in range(4)]
+
+    total_receivable = _sum(receivable)
+    total_payable = _sum(payable)
+    net = money(total_receivable - total_payable)
+    return {
+        "as_on": as_on,
+        "bucket_labels": OUTSTANDING_BUCKET_LABELS,
+        "receivable_rows": receivable,
+        "payable_rows": payable,
+        "receivable_advance_rows": rec_adv,
+        "payable_advance_rows": pay_adv,
+        "total_receivable": total_receivable,
+        "total_payable": total_payable,
+        "total_receivable_advance": _sum(rec_adv),
+        "total_payable_advance": _sum(pay_adv),
+        "receivable_bucket_totals": _bucket_totals(receivable),
+        "payable_bucket_totals": _bucket_totals(payable),
+        "net_position": abs(net),
+        "net_label": "Net Receivable" if net >= 0 else "Net Payable",
+        "party_choices": party_choices,
+    }
