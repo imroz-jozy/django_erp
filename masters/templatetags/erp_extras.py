@@ -1,5 +1,6 @@
 from django import template
 
+from ..models import display_voucher_no_for_obj
 from ..reports import _voucher_admin_url
 
 register = template.Library()
@@ -13,3 +14,9 @@ def admin_url(obj):
     each template needing to know which model (Sale, Purchase, Journal...)
     a given row actually is."""
     return _voucher_admin_url(obj) or ""
+
+
+@register.filter(name="report_vno")
+def report_vno(obj):
+    """Prefix/suffix formatted voucher number for reports."""
+    return display_voucher_no_for_obj(obj)

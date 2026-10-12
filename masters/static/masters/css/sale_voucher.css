@@ -116,6 +116,20 @@
   box-shadow: 0 2px 4px rgba(0,0,0,0.15);
 }
 
+.voucher-print-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 12px;
+  border: 1px solid rgba(255, 255, 255, .45);
+  border-radius: 5px;
+  color: #fff !important;
+  background: rgba(255, 255, 255, .12);
+  font-size: .82rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+.voucher-print-link:hover { background: rgba(255, 255, 255, .22); }
+
 /* Shortcuts Bar */
 .shortcuts-legend {
   font-size: 0.78rem;

@@ -1,10 +1,10 @@
 from datetime import date
 
 from django.contrib import admin, messages
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django import forms
 from django.forms.models import BaseInlineFormSet
-from django.http import HttpResponseRedirect, JsonResponse
+from django.http import Http404, HttpResponseRedirect, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.template.response import TemplateResponse
 from django.urls import path, reverse
@@ -42,6 +42,8 @@ from .models import (
     SaleReturnItem,
     SaleType,
     Unit,
+    VoucherSeriesConfig,
+    get_next_voucher_no_preview,
 )
 from .money import ZERO, money
 from .excel_service import (
@@ -103,6 +105,7 @@ from .reports import (
     purchase_analysis,
     outstanding_report,
     trial_balance,
+    missing_vouchers_report,
 )
 
 
@@ -320,7 +323,7 @@ def sales_register_view(request):
         _report_context(
             request,
             "Sales Register",
-            {"rows": rows, "total": total, "party_label": "Customer"},
+            {"rows": rows, "total": total, "party_label": "Customer", "show_print_link": True},
         ),
     )
 
@@ -827,6 +830,16 @@ def purchase_analysis_view(request):
         request,
         "admin/masters/report_purchase_analysis.html",
         _report_context(request, "Purchase Analysis", ctx),
+    )
+
+
+def missing_vouchers_report_view(request):
+    vtype = request.GET.get("vtype") or None
+    data = missing_vouchers_report(selected_voucher_type=vtype)
+    return TemplateResponse(
+        request,
+        "admin/masters/report_missing_vouchers.html",
+        _report_context(request, "Missing Voucher Numbers Report", data),
     )
 
 
@@ -1498,6 +1511,11 @@ if not getattr(admin.site, "_erp_urls_patched", False):
                 "reports/",
                 admin.site.admin_view(reports_hub_view),
                 name="erp_reports_hub",
+            ),
+            path(
+                "reports/missing-vouchers/",
+                admin.site.admin_view(missing_vouchers_report_view),
+                name="erp_missing_vouchers",
             ),
             path(
                 "reports/all-vouchers-register/",
@@ -2223,6 +2241,83 @@ class CompanyProfileAdmin(admin.ModelAdmin):
         return redirect("admin:masters_companyprofile_change", obj.pk)
 
 
+@admin.register(VoucherSeriesConfig)
+class VoucherSeriesConfigAdmin(admin.ModelAdmin):
+    list_display = (
+        "voucher_type",
+        "prefix",
+        "suffix",
+        "number_width",
+        "starting_number",
+        "current_number",
+        "next_number_preview",
+        "is_auto",
+    )
+    list_editable = ("is_auto",)
+    search_fields = ("voucher_type", "prefix", "suffix")
+    list_filter = ("is_auto",)
+    readonly_fields = ("next_number_preview",)
+    fieldsets = (
+        (
+            "Voucher Type & Auto Status",
+            {
+                "fields": ("voucher_type", "is_auto"),
+                "description": "Choose whether new vouchers get auto-generated numbers or remain blank for manual entry.",
+            },
+        ),
+        (
+            "Series Formatting (Prefix & Suffix)",
+            {
+                "fields": ("prefix", "suffix", "number_width", "next_number_preview"),
+                "description": (
+                    "Prefix and suffix appear on reports only (e.g. INV-0001). "
+                    "Voucher screens store a numeric invoice/voucher number (e.g. 0001). "
+                    "Number width is the minimum digits with zero padding."
+                ),
+            },
+        ),
+        (
+            "Numbering Sequence",
+            {
+                "fields": ("starting_number", "current_number"),
+                "description": (
+                    "Starting Number: the first voucher number to assign. "
+                    "Current Number: highest number assigned so far. "
+                    "The next voucher will automatically receive (Current Number + 1)."
+                ),
+            },
+        ),
+    )
+    actions = ["sync_counters_action", "reset_counters_action"]
+
+    @admin.display(description="Next Voucher No")
+    def next_number_preview(self, obj):
+        if not obj or not obj.pk:
+            return "-"
+        next_n = obj.starting_number if obj.current_number == 0 else obj.current_number + 1
+        stored = obj._stored_number(next_n)
+        formatted = obj._format_number(next_n)
+        return format_html(
+            '<span style="font-family:monospace; font-weight:700; color:#2563eb; font-size:1.05rem;">{}</span>'
+            ' <span style="color:#64748b; font-size:0.82rem;">(reports: {})</span>',
+            stored,
+            formatted,
+        )
+
+    @admin.action(description="🔄 Sync counter from existing database vouchers")
+    def sync_counters_action(self, request, queryset):
+        count = 0
+        for cfg in queryset:
+            cfg.sync_counter_from_existing()
+            count += 1
+        self.message_user(request, f"Synchronized sequence counter for {count} voucher series from existing database records.")
+
+    @admin.action(description="⏮️ Reset counter to 0 (restart from Starting Number)")
+    def reset_counters_action(self, request, queryset):
+        count = queryset.update(current_number=0)
+        self.message_user(request, f"Reset counter for {count} voucher series to 0. Next voucher will start from Starting Number.")
+
+
 @admin.register(AccountGroup)
 class AccountGroupAdmin(admin.ModelAdmin):
     change_list_template = "admin/masters/accountgroup/change_list.html"
@@ -2505,7 +2600,143 @@ class BillSundryAdmin(admin.ModelAdmin):
     )
 
 
-class VoucherAdminMixin:
+class _PrintVoucherAfterSaveMixin:
+    """Open a clean, read-only print document after a successful save."""
+
+    def get_urls(self):
+        opts = self.model._meta
+        custom_urls = [
+            path(
+                "<path:object_id>/print/",
+                self.admin_site.admin_view(self.voucher_print_view),
+                name=f"{opts.app_label}_{opts.model_name}_print",
+            )
+        ]
+        return custom_urls + super().get_urls()
+
+    def voucher_print_view(self, request, object_id):
+        obj = self.get_object(request, object_id)
+        if obj is None:
+            raise Http404
+        if not self.has_view_or_change_permission(request, obj):
+            raise PermissionDenied
+
+        context = self.admin_site.each_context(request)
+        context.update(self._voucher_print_context(obj))
+        return TemplateResponse(request, "admin/masters/voucher_print.html", context)
+
+    def _voucher_print_context(self, obj):
+        item_models = (Sale, Purchase, SaleReturn, PurchaseReturn)
+        is_item_voucher = isinstance(obj, item_models)
+        if isinstance(obj, Sale):
+            title, party_label = "TAX INVOICE", "Bill To"
+        elif isinstance(obj, Purchase):
+            title, party_label = "PURCHASE VOUCHER", "Supplier"
+        elif isinstance(obj, SaleReturn):
+            title, party_label = "SALES RETURN", "Customer"
+        elif isinstance(obj, PurchaseReturn):
+            title, party_label = "PURCHASE RETURN", "Supplier"
+        elif isinstance(obj, Payment):
+            title, party_label = "PAYMENT VOUCHER", ""
+        elif isinstance(obj, Receipt):
+            title, party_label = "RECEIPT VOUCHER", ""
+        elif isinstance(obj, Journal):
+            title, party_label = "JOURNAL VOUCHER", ""
+        elif isinstance(obj, CreditNote):
+            title, party_label = "CREDIT NOTE", "Customer"
+        elif isinstance(obj, DebitNote):
+            title, party_label = "DEBIT NOTE", "Supplier"
+        else:
+            title, party_label = obj._meta.verbose_name.upper(), "Party / Account"
+
+        number = getattr(obj, "invoice_no", "") or getattr(obj, "voucher_no", "")
+        context = {
+            "company": CompanyProfile.get_solo(),
+            "voucher": obj,
+            "document_title": title,
+            "voucher_number": number,
+            "party_label": party_label,
+            "party": getattr(obj, "account", None),
+            "is_item_voucher": is_item_voucher,
+            "is_journal": isinstance(obj, Journal),
+            "rows": [],
+            "sundries": [],
+            "totals": {},
+        }
+
+        if is_item_voucher:
+            context["rows"] = [
+                {
+                    "item": line.item,
+                    "quantity": line.quantity,
+                    "free_quantity": line.free_quantity,
+                    "unit": line.unit,
+                    "rate": line.rate,
+                    "discount": line.discount,
+                    "tax": line.tax,
+                    "amount": line.net_amount,
+                }
+                for line in obj.items.select_related("item", "unit")
+            ]
+            totals = obj.totals()
+            context["totals"] = totals
+            context["sundries"] = [
+                {"name": line.bill_sundry.name, "amount": amount}
+                for line, amount in zip(
+                    obj.bill_sundries.select_related("bill_sundry"),
+                    totals.get("sundry_signed_amounts", []),
+                )
+            ]
+            context["type_name"] = getattr(obj, "sale_type", None) or getattr(obj, "purchase_type", None)
+            context["reference"] = getattr(obj, "against_sale", None) or getattr(obj, "against_purchase", None)
+        elif isinstance(obj, Journal):
+            context["rows"] = [
+                {"account": line.account, "debit": line.debit, "credit": line.credit, "remarks": line.remarks}
+                for line in obj.lines.select_related("account")
+            ]
+            context["totals"] = obj.totals()
+        else:
+            context["rows"] = [
+                {
+                    "account": line.account,
+                    "amount": getattr(line, "amount", 0),
+                    "debit": getattr(line, "debit", 0),
+                    "credit": getattr(line, "credit", 0),
+                }
+                for line in obj.lines.select_related("account")
+            ]
+            context["totals"] = {"net_amount": getattr(obj, "total_amount", 0)}
+            context["through"] = getattr(obj, "through", None)
+            if isinstance(obj, Payment):
+                context["through_label"] = "Paid from"
+            elif isinstance(obj, Receipt):
+                context["through_label"] = "Received into"
+
+        return context
+
+    def _print_saved_voucher(self, request, obj, response):
+        if (
+            response.status_code in (301, 302, 303, 307, 308)
+            and "_addanother" not in request.POST
+            and request.POST.get("_popup") != "1"
+        ):
+            opts = self.model._meta
+            print_url = reverse(
+                f"admin:{opts.app_label}_{opts.model_name}_print", args=(obj.pk,)
+            )
+            response["Location"] = f"{print_url}?autoprint=1"
+        return response
+
+    def response_add(self, request, obj, post_url_continue=None):
+        response = super().response_add(request, obj, post_url_continue)
+        return self._print_saved_voucher(request, obj, response)
+
+    def response_change(self, request, obj):
+        response = super().response_change(request, obj)
+        return self._print_saved_voucher(request, obj, response)
+
+
+class VoucherAdminMixin(_PrintVoucherAfterSaveMixin):
     readonly_fields = (
         "item_basic_amount",
         "item_discount_amount",
@@ -2540,15 +2771,57 @@ class VoucherAdminMixin:
     sundry_amount.short_description = "Bill sundry"
     net_amount.short_description = "Net amount"
 
+    def get_changeform_initial_data(self, request):
+        initial = super().get_changeform_initial_data(request)
+        model = getattr(self, "model", None)
+        if model == Sale and not initial.get("invoice_no"):
+            preview = get_next_voucher_no_preview(VoucherSeriesConfig.VoucherType.SALE)
+            if preview:
+                initial["invoice_no"] = preview
+        elif model == Purchase and not initial.get("invoice_no"):
+            preview = get_next_voucher_no_preview(VoucherSeriesConfig.VoucherType.PURCHASE)
+            if preview:
+                initial["invoice_no"] = preview
+        elif model == SaleReturn and not initial.get("voucher_no"):
+            preview = get_next_voucher_no_preview(VoucherSeriesConfig.VoucherType.SALE_RETURN)
+            if preview:
+                initial["voucher_no"] = preview
+        elif model == PurchaseReturn and not initial.get("voucher_no"):
+            preview = get_next_voucher_no_preview(VoucherSeriesConfig.VoucherType.PURCHASE_RETURN)
+            if preview:
+                initial["voucher_no"] = preview
+        return initial
 
-class SaleForm(forms.ModelForm):
+
+class _VoucherDatePickerFormMixin:
+    """Render voucher dates with the browser's calendar picker and text entry."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if "date" in self.fields:
+            self.fields["date"].widget = forms.DateInput(
+                format="%Y-%m-%d",
+                attrs={"type": "date", "class": "v-input-date"},
+            )
+
+
+class SaleForm(_VoucherDatePickerFormMixin, forms.ModelForm):
     class Meta:
         model = Sale
         fields = "__all__"
         widgets = {
+            "invoice_no": forms.TextInput(attrs={"placeholder": "Auto (or enter manual)", "class": "v-input-invoice"}),
             "account": forms.Select(attrs={"class": "v-input-account"}),
             "narration": forms.TextInput(attrs={"placeholder": "Narration / Remarks...", "class": "v-input-narration"}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not (self.instance and self.instance.pk):
+            if not self.initial.get("invoice_no"):
+                preview = get_next_voucher_no_preview(VoucherSeriesConfig.VoucherType.SALE)
+                if preview:
+                    self.initial["invoice_no"] = preview
 
 
 @admin.register(Sale)
@@ -2556,7 +2829,7 @@ class SaleAdmin(VoucherAdminMixin, admin.ModelAdmin):
     form = SaleForm
     change_list_template = "admin/masters/sale/change_list.html"
     change_form_template = "admin/masters/sale/change_form.html"
-    list_display = ("invoice_no", "date", "sale_type", "account", "net_amount_list")
+    list_display = ("invoice_no", "date", "sale_type", "account", "net_amount_list", "print_voucher_link")
     search_fields = ("invoice_no", "account__account_name")
     list_filter = ("date", "sale_type")
     inlines = [SaleItemInline, SaleBillSundryInline]
@@ -2593,15 +2866,31 @@ class SaleAdmin(VoucherAdminMixin, admin.ModelAdmin):
     def net_amount_list(self, obj):
         return obj.net_amount
 
+    @admin.display(description="Print")
+    def print_voucher_link(self, obj):
+        url = reverse("admin:masters_sale_print", args=(obj.pk,))
+        return format_html(
+            '<a href="{}?autoprint=1" target="_blank" rel="noopener">Print</a>', url
+        )
 
-class PurchaseForm(forms.ModelForm):
+
+class PurchaseForm(_VoucherDatePickerFormMixin, forms.ModelForm):
     class Meta:
         model = Purchase
         fields = "__all__"
         widgets = {
+            "invoice_no": forms.TextInput(attrs={"placeholder": "Auto (or enter manual)", "class": "v-input-invoice"}),
             "account": forms.Select(attrs={"class": "v-input-account"}),
             "narration": forms.TextInput(attrs={"placeholder": "Narration / Remarks...", "class": "v-input-narration"}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not (self.instance and self.instance.pk):
+            if not self.initial.get("invoice_no"):
+                preview = get_next_voucher_no_preview(VoucherSeriesConfig.VoucherType.PURCHASE)
+                if preview:
+                    self.initial["invoice_no"] = preview
 
 
 @admin.register(Purchase)
@@ -2653,14 +2942,23 @@ class PurchaseAdmin(VoucherAdminMixin, admin.ModelAdmin):
         return obj.net_amount
 
 
-class SaleReturnForm(forms.ModelForm):
+class SaleReturnForm(_VoucherDatePickerFormMixin, forms.ModelForm):
     class Meta:
         model = SaleReturn
         fields = "__all__"
         widgets = {
+            "voucher_no": forms.TextInput(attrs={"placeholder": "Auto (or enter manual)", "class": "v-input-voucher"}),
             "account": forms.Select(attrs={"class": "v-input-account"}),
             "narration": forms.TextInput(attrs={"placeholder": "Narration / Remarks...", "class": "v-input-narration"}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not (self.instance and self.instance.pk):
+            if not self.initial.get("voucher_no"):
+                preview = get_next_voucher_no_preview(VoucherSeriesConfig.VoucherType.SALE_RETURN)
+                if preview:
+                    self.initial["voucher_no"] = preview
 
 
 @admin.register(SaleReturn)
@@ -2713,14 +3011,23 @@ class SaleReturnAdmin(VoucherAdminMixin, admin.ModelAdmin):
         return obj.net_amount
 
 
-class PurchaseReturnForm(forms.ModelForm):
+class PurchaseReturnForm(_VoucherDatePickerFormMixin, forms.ModelForm):
     class Meta:
         model = PurchaseReturn
         fields = "__all__"
         widgets = {
+            "voucher_no": forms.TextInput(attrs={"placeholder": "Auto (or enter manual)", "class": "v-input-voucher"}),
             "account": forms.Select(attrs={"class": "v-input-account"}),
             "narration": forms.TextInput(attrs={"placeholder": "Narration / Remarks...", "class": "v-input-narration"}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not (self.instance and self.instance.pk):
+            if not self.initial.get("voucher_no"):
+                preview = get_next_voucher_no_preview(VoucherSeriesConfig.VoucherType.PURCHASE_RETURN)
+                if preview:
+                    self.initial["voucher_no"] = preview
 
 
 @admin.register(PurchaseReturn)
@@ -2776,7 +3083,7 @@ class PurchaseReturnAdmin(VoucherAdminMixin, admin.ModelAdmin):
 CASH_BANK_GROUPS = ("Cash-in-hand", "Bank Accounts")
 
 
-class CashVoucherAdmin(admin.ModelAdmin):
+class CashVoucherAdmin(_PrintVoucherAfterSaveMixin, admin.ModelAdmin):
     list_display = ("voucher_no", "date", "parties", "through", "total_amount_list")
     search_fields = ("voucher_no", "lines__account__account_name", "narration")
     list_filter = ("date",)
@@ -2801,21 +3108,49 @@ class CashVoucherAdmin(admin.ModelAdmin):
             )
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
+    def get_changeform_initial_data(self, request):
+        initial = super().get_changeform_initial_data(request)
+        model = getattr(self, "model", None)
+        type_map = {
+            Payment: VoucherSeriesConfig.VoucherType.PAYMENT,
+            Receipt: VoucherSeriesConfig.VoucherType.RECEIPT,
+            Journal: VoucherSeriesConfig.VoucherType.JOURNAL,
+        }
+        if model in type_map and not initial.get("voucher_no"):
+            preview = get_next_voucher_no_preview(type_map[model])
+            if preview:
+                initial["voucher_no"] = preview
+        return initial
+
 
 class _VoucherHeaderFormMixin:
-    """Shared by Payment / Receipt / Journal header forms: single-line
-    narration box, 'Auto' voucher-no placeholder and today's date on new
+    """Shared by Payment / Receipt / Journal / Note header forms: single-line
+    narration box, next voucher number pre-filled and today's date on new
     vouchers (desktop-ERP style)."""
+
+    voucher_type_key = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if "voucher_no" in self.fields:
-            self.fields["voucher_no"].widget.attrs.setdefault("placeholder", "Auto")
-        if not (self.instance and self.instance.pk) and "date" in self.fields:
-            self.fields["date"].initial = date.today
+        if "date" in self.fields:
+            self.fields["date"].widget = forms.DateInput(
+                format="%Y-%m-%d",
+                attrs={"type": "date", "class": "v-input-date"},
+            )
+        if not (self.instance and self.instance.pk):
+            if "voucher_no" in self.fields:
+                if not self.initial.get("voucher_no") and self.voucher_type_key:
+                    preview = get_next_voucher_no_preview(self.voucher_type_key)
+                    if preview:
+                        self.initial["voucher_no"] = preview
+                self.fields["voucher_no"].widget.attrs.setdefault("placeholder", "Auto (or enter manual)")
+            if "date" in self.fields and not self.initial.get("date"):
+                self.fields["date"].initial = date.today
 
 
 class PaymentForm(_VoucherHeaderFormMixin, forms.ModelForm):
+    voucher_type_key = VoucherSeriesConfig.VoucherType.PAYMENT
+
     class Meta:
         model = Payment
         fields = "__all__"
@@ -2826,6 +3161,8 @@ class PaymentForm(_VoucherHeaderFormMixin, forms.ModelForm):
 
 
 class ReceiptForm(_VoucherHeaderFormMixin, forms.ModelForm):
+    voucher_type_key = VoucherSeriesConfig.VoucherType.RECEIPT
+
     class Meta:
         model = Receipt
         fields = "__all__"
@@ -2836,6 +3173,8 @@ class ReceiptForm(_VoucherHeaderFormMixin, forms.ModelForm):
 
 
 class JournalForm(_VoucherHeaderFormMixin, forms.ModelForm):
+    voucher_type_key = VoucherSeriesConfig.VoucherType.JOURNAL
+
     class Meta:
         model = Journal
         fields = "__all__"
@@ -2845,6 +3184,8 @@ class JournalForm(_VoucherHeaderFormMixin, forms.ModelForm):
 
 
 class CreditNoteForm(_VoucherHeaderFormMixin, forms.ModelForm):
+    voucher_type_key = VoucherSeriesConfig.VoucherType.CREDIT_NOTE
+
     class Meta:
         model = CreditNote
         fields = "__all__"
@@ -2855,6 +3196,8 @@ class CreditNoteForm(_VoucherHeaderFormMixin, forms.ModelForm):
 
 
 class DebitNoteForm(_VoucherHeaderFormMixin, forms.ModelForm):
+    voucher_type_key = VoucherSeriesConfig.VoucherType.DEBIT_NOTE
+
     class Meta:
         model = DebitNote
         fields = "__all__"
@@ -2886,7 +3229,7 @@ class ReceiptAdmin(_CashVoucherFrontendMixin, CashVoucherAdmin):
     inlines = [ReceiptLineInline]
 
 
-class PartyNoteAdmin(admin.ModelAdmin):
+class PartyNoteAdmin(_PrintVoucherAfterSaveMixin, admin.ModelAdmin):
     """Shared shape for CreditNote/DebitNote: one party account in the
     header, readonly total, and a lines_summary column for the changelist.
     Deliberately NOT a subclass of CashVoucherAdmin: that mixin restricts
@@ -2907,6 +3250,19 @@ class PartyNoteAdmin(admin.ModelAdmin):
     @admin.display(description="Total")
     def total_amount_list(self, obj):
         return obj.total_amount
+
+    def get_changeform_initial_data(self, request):
+        initial = super().get_changeform_initial_data(request)
+        model = getattr(self, "model", None)
+        type_map = {
+            CreditNote: VoucherSeriesConfig.VoucherType.CREDIT_NOTE,
+            DebitNote: VoucherSeriesConfig.VoucherType.DEBIT_NOTE,
+        }
+        if model in type_map and not initial.get("voucher_no"):
+            preview = get_next_voucher_no_preview(type_map[model])
+            if preview:
+                initial["voucher_no"] = preview
+        return initial
 
 
 @admin.register(CreditNote)
@@ -2943,7 +3299,7 @@ class DebitNoteAdmin(_CashVoucherFrontendMixin, PartyNoteAdmin):
 
 
 @admin.register(Journal)
-class JournalAdmin(admin.ModelAdmin):
+class JournalAdmin(_PrintVoucherAfterSaveMixin, admin.ModelAdmin):
     form = JournalForm
     change_form_template = "admin/masters/journal/change_form.html"
     change_list_template = "admin/masters/journal/change_list.html"

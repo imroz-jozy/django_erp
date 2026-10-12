@@ -18,7 +18,7 @@
       <td>{{ note.date }}</td>
       <td>
         {% with url=note|admin_url %}
-        {% if url %}<a href="{{ url }}">{{ note.voucher_no }}</a>{% else %}{{ note.voucher_no }}{% endif %}
+        {% if url %}<a href="{{ url }}">{{ note|report_vno }}</a>{% else %}{{ note|report_vno }}{% endif %}
         {% endwith %}
       </td>
       <td>{{ note.account }}</td>

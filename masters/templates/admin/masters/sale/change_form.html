@@ -104,6 +104,10 @@
           </button>
         </div>
 
+        {% if not add %}
+        <a class="voucher-print-link" href="{% url 'admin:masters_sale_print' original.pk %}?autoprint=1" target="_blank" rel="noopener">Print invoice</a>
+        {% endif %}
+
         <div class="shortcuts-legend">
           <span><kbd>F2</kbd> Save</span>
           <span><kbd>Enter</kbd> Next Cell</span>

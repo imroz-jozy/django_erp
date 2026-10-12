@@ -1,4 +1,5 @@
 {% extends "admin/masters/report_base.html" %}
+{% load erp_extras %}
 
 {% block report_body %}
 <table class="erp-report">
@@ -17,7 +18,7 @@
       <td>{{ row.date }}</td>
       <td>
         <a href="{% url 'admin:masters_journal_change' row.id %}">
-          <strong>{{ row.voucher_no }}</strong>
+          <strong>{{ row|report_vno }}</strong>
         </a>
       </td>
       <td>{{ row.lines_summary }}</td>

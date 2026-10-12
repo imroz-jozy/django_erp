@@ -48,8 +48,11 @@ class JournalModelTestCase(TestCase):
         )
 
     def test_voucher_no_auto_generation(self):
+        from masters.models import display_voucher_no_for_obj
+
         jrn = Journal.objects.create(date=date(2026, 1, 1))
-        self.assertTrue(jrn.voucher_no.startswith("JRN-"))
+        self.assertTrue(jrn.voucher_no.isdigit())
+        self.assertTrue(display_voucher_no_for_obj(jrn).startswith("JRN-"))
         self.assertEqual(str(jrn), jrn.voucher_no)
 
     def test_totals_and_lines_summary(self):
@@ -612,3 +615,92 @@ class OutstandingReportTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "OS Customer")
         self.assertContains(response, "OS Supplier")
+
+
+class VoucherSeriesAndMissingReportTestCase(TestCase):
+    def setUp(self):
+        from masters.models import Account, AccountGroup, VoucherSeriesConfig
+        self.grp = AccountGroup.objects.create(name="Test Group", primary_group=True, nature=AccountGroup.Nature.ASSET)
+        self.cash = Account.objects.create(account_name="Test Cash", account_group=self.grp)
+        self.party = Account.objects.create(account_name="Test Party", account_group=self.grp)
+
+        user = get_user_model().objects.create_superuser("seriesadmin", "s@s.com", "pw")
+        self.client = Client()
+        self.client.force_login(user)
+
+    def test_auto_numbering_and_manual_advance(self):
+        from masters.models import Payment, PaymentLine, VoucherSeriesConfig
+
+        # Configure payment series cleanly
+        cfg, _ = VoucherSeriesConfig.objects.get_or_create(
+            voucher_type=VoucherSeriesConfig.VoucherType.PAYMENT,
+            defaults={"prefix": "PMT-", "number_width": 4, "starting_number": 1, "current_number": 0, "is_auto": True}
+        )
+        cfg.prefix = "PMT-"
+        cfg.number_width = 4
+        cfg.starting_number = 1
+        cfg.current_number = 0
+        cfg.is_auto = True
+        cfg.save()
+
+        from masters.models import display_voucher_no_for_obj
+
+        # 1. Auto voucher stores a numeric number; prefix is for reports only
+        p1 = Payment.objects.create(date=date(2026, 5, 1), through=self.cash)
+        self.assertEqual(p1.voucher_no, "0001")
+        self.assertEqual(display_voucher_no_for_obj(p1), "PMT-0001")
+
+        # 2. Manual prefixed or plain digits both store as numeric
+        p2 = Payment.objects.create(date=date(2026, 5, 2), through=self.cash, voucher_no="PMT-0005")
+        self.assertEqual(p2.voucher_no, "0005")
+
+        # 3. Next auto voucher continues from 6 as numeric 0006
+        p3 = Payment.objects.create(date=date(2026, 5, 3), through=self.cash)
+        self.assertEqual(p3.voucher_no, "0006")
+        self.assertEqual(display_voucher_no_for_obj(p3), "PMT-0006")
+
+    def test_missing_vouchers_detection(self):
+        from masters.models import Payment, VoucherSeriesConfig
+        from masters.reports import missing_vouchers_report
+
+        cfg, _ = VoucherSeriesConfig.objects.get_or_create(
+            voucher_type=VoucherSeriesConfig.VoucherType.PAYMENT,
+            defaults={"prefix": "PMT-", "number_width": 4, "starting_number": 1, "current_number": 0, "is_auto": True}
+        )
+        cfg.prefix = "PMT-"
+        cfg.number_width = 4
+        cfg.starting_number = 1
+        cfg.current_number = 0
+        cfg.is_auto = True
+        cfg.save()
+
+        # Create vouchers 1, 2, and 4 (missing 3)
+        Payment.objects.create(date=date(2026, 5, 1), through=self.cash, voucher_no="PMT-0001")
+        Payment.objects.create(date=date(2026, 5, 2), through=self.cash, voucher_no="PMT-0002")
+        Payment.objects.create(date=date(2026, 5, 4), through=self.cash, voucher_no="PMT-0004")
+
+        rep = missing_vouchers_report(selected_voucher_type=VoucherSeriesConfig.VoucherType.PAYMENT)
+        self.assertTrue(rep["has_gaps"])
+        self.assertEqual(rep["total_missing"], 1)
+        self.assertEqual(rep["missing_items"][0]["missing_voucher_no"], "PMT-0003")
+        self.assertIn("voucher_no=0003", rep["missing_items"][0]["create_url"])
+
+    def test_missing_vouchers_report_view(self):
+        from masters.models import Payment, VoucherSeriesConfig
+        cfg, _ = VoucherSeriesConfig.objects.get_or_create(
+            voucher_type=VoucherSeriesConfig.VoucherType.PAYMENT,
+            defaults={"prefix": "PMT-", "number_width": 4, "starting_number": 1, "current_number": 0, "is_auto": True}
+        )
+        cfg.prefix = "PMT-"
+        cfg.current_number = 3
+        cfg.save()
+        # Create PMT-0001 and PMT-0003 (missing PMT-0002)
+        Payment.objects.create(date=date(2026, 5, 1), through=self.cash, voucher_no="PMT-0001")
+        Payment.objects.create(date=date(2026, 5, 3), through=self.cash, voucher_no="PMT-0003")
+
+        response = self.client.get(reverse("admin:erp_missing_vouchers"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "PMT-0002")
+        self.assertContains(response, "Missing Voucher Numbers Report")
+        self.assertContains(response, "+ Create Voucher")
+

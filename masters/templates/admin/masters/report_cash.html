@@ -19,7 +19,7 @@
       <td>{{ row.date }}</td>
       <td>
         {% with url=row|admin_url %}
-        {% if url %}<a href="{{ url }}">{{ row.voucher_no }}</a>{% else %}{{ row.voucher_no }}{% endif %}
+        {% if url %}<a href="{{ url }}">{{ row|report_vno }}</a>{% else %}{{ row|report_vno }}{% endif %}
         {% endwith %}
       </td>
       <td>{{ row.parties_summary }}</td>

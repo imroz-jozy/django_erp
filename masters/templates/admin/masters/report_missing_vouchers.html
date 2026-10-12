@@ -1,0 +1,347 @@
+{% extends "admin/masters/report_base.html" %}
+{% load i18n erp_extras %}
+
+{% block extrahead %}
+{{ block.super }}
+<style>
+  .erp-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .erp-kpi-card {
+    background: var(--body-bg, #fff);
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 8px;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+  }
+  .erp-kpi-title {
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--body-quiet-color, #64748b);
+    margin-bottom: 6px;
+  }
+  .erp-kpi-val {
+    font-size: 1.8rem;
+    font-weight: 800;
+    color: var(--header-color, #0f172a);
+    line-height: 1.1;
+  }
+  .erp-kpi-sub {
+    font-size: 0.8rem;
+    margin-top: 6px;
+    color: var(--body-quiet-color, #64748b);
+  }
+  .kpi-good {
+    color: #16a34a !important;
+  }
+  .kpi-alert {
+    color: #dc2626 !important;
+  }
+  .kpi-warn {
+    color: #d97706 !important;
+  }
+
+  /* Series Grid */
+  .series-overview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+  .series-card {
+    background: var(--body-bg, #fff);
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 8px;
+    padding: 14px 16px;
+    transition: transform 0.15s, box-shadow 0.15s;
+    border-left: 4px solid #3b82f6;
+  }
+  .series-card.has-gaps {
+    border-left-color: #ef4444;
+    background: rgba(239, 68, 68, 0.02);
+  }
+  .series-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+  .series-name {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--header-color, #1e293b);
+  }
+  .series-badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 9999px;
+  }
+  .badge-clean {
+    background: #dcfce7;
+    color: #15803d;
+  }
+  .badge-gap {
+    background: #fee2e2;
+    color: #b91c1c;
+  }
+  .series-meta {
+    font-size: 0.82rem;
+    color: var(--body-quiet-color, #64748b);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+  }
+  .series-meta strong {
+    color: var(--body-fg, #334155);
+  }
+
+  /* Missing Table */
+  .missing-tag {
+    display: inline-block;
+    padding: 4px 10px;
+    background: #fef2f2;
+    color: #b91c1c;
+    border: 1px solid #fecaca;
+    border-radius: 6px;
+    font-family: monospace;
+    font-weight: 700;
+    font-size: 0.95rem;
+    letter-spacing: 0.02em;
+  }
+  .vtype-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: #f1f5f9;
+    color: #334155;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+  .btn-create-voucher {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: #2563eb;
+    color: #fff !important;
+    padding: 5px 12px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: background 0.15s, transform 0.1s;
+    box-shadow: 0 1px 2px rgba(37,99,235,0.2);
+  }
+  .btn-create-voucher:hover {
+    background: #1d4ed8;
+    transform: translateY(-1px);
+    color: #fff !important;
+  }
+  .btn-manage-series {
+    background: #0f172a;
+    color: #fff !important;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn-manage-series:hover {
+    background: #1e293b;
+    color: #fff !important;
+  }
+
+  .clean-state-box {
+    text-align: center;
+    padding: 48px 24px;
+    background: var(--body-bg, #fff);
+    border: 1px dashed #86efac;
+    border-radius: 10px;
+    margin: 20px 0;
+  }
+  .clean-state-icon {
+    font-size: 3rem;
+    margin-bottom: 12px;
+  }
+  .clean-state-box h3 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #166534;
+    margin: 0 0 6px;
+  }
+  .clean-state-box p {
+    color: #64748b;
+    margin: 0;
+    font-size: 0.95rem;
+  }
+</style>
+{% endblock %}
+
+{% block report_title %}Missing Voucher Numbers Report (छूटे हुए वाउचर){% endblock %}
+
+{% block report_subtitle_extra %}
+&bull; Sequence audit and gap identifier across all active voucher series
+{% endblock %}
+
+{% block report_filters %}
+<div class="erp-filter-card">
+  <form method="get" class="erp-filter-form">
+    <div class="erp-field-item">
+      <label for="id_vtype">Voucher Type</label>
+      <select name="vtype" id="id_vtype" class="v-input-vtype" onchange="this.form.submit()">
+        {% for val, label in type_choices %}
+        <option value="{{ val }}" {% if val == selected_voucher_type %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="erp-field-item">
+      <label for="id_search">Quick Filter</label>
+      <input type="text" id="id_search" placeholder="Type voucher no..." onkeyup="filterMissingTable()">
+    </div>
+
+    <div style="margin-left: auto; display: flex; gap: 8px;">
+      <a href="{% url 'admin:masters_voucherseriesconfig_changelist' %}" class="btn-manage-series" title="Configure series prefix, suffix, and starting numbers">
+        ⚙️ Manage Voucher Series
+      </a>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block report_summary %}
+<!-- KPI METRICS -->
+<div class="erp-kpi-grid">
+  <div class="erp-kpi-card">
+    <span class="erp-kpi-title">Voucher Series Monitored</span>
+    <span class="erp-kpi-val">{{ total_series }}</span>
+    <span class="erp-kpi-sub">Voucher types configured</span>
+  </div>
+
+  <div class="erp-kpi-card">
+    <span class="erp-kpi-title">Total Vouchers Issued</span>
+    <span class="erp-kpi-val">{{ total_vouchers }}</span>
+    <span class="erp-kpi-sub">Total across monitored series</span>
+  </div>
+
+  <div class="erp-kpi-card">
+    <span class="erp-kpi-title">Missing Numbers Detected</span>
+    <span class="erp-kpi-val {% if total_missing > 0 %}kpi-alert{% else %}kpi-good{% endif %}">{{ total_missing }}</span>
+    <span class="erp-kpi-sub">Sequence gaps found</span>
+  </div>
+
+  <div class="erp-kpi-card">
+    <span class="erp-kpi-title">Sequence Integrity</span>
+    <span class="erp-kpi-val {% if total_missing == 0 %}kpi-good{% else %}kpi-warn{% endif %}">
+      {% if total_missing == 0 %}100% OK{% else %}Gaps Exist{% endif %}
+    </span>
+    <span class="erp-kpi-sub">{% if total_missing == 0 %}No broken numbers{% else %}Manual fill recommended{% endif %}</span>
+  </div>
+</div>
+
+<!-- SERIES OVERVIEW CARDS -->
+<div class="series-overview-grid">
+  {% for sc in series_cards %}
+  <div class="series-card {% if sc.has_gaps %}has-gaps{% endif %}">
+    <div class="series-card-head">
+      <span class="series-name">{{ sc.name }}</span>
+      {% if sc.has_gaps %}
+      <span class="series-badge badge-gap">{{ sc.missing_count }} Missing</span>
+      {% else %}
+      <span class="series-badge badge-clean">Sequential</span>
+      {% endif %}
+    </div>
+    <div class="series-meta">
+      <div>Pattern: <strong>{{ sc.prefix }}...{{ sc.suffix }}</strong></div>
+      <div>Issued: <strong>{{ sc.vouchers_count }}</strong></div>
+      <div>Current: <strong>#{{ sc.current_number }}</strong></div>
+      <div>Next Auto: <strong>{{ sc.next_voucher_no }}</strong></div>
+      <div>First: <strong>{{ sc.first_no }}</strong></div>
+      <div>Last: <strong>{{ sc.last_no }}</strong></div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}
+
+{% block report_body %}
+{% if missing_items %}
+<div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+  <h2 style="font-size: 1.15rem; font-weight: 700; margin: 0; color: var(--header-color, #1e293b);">
+    Detected Missing Voucher Numbers ({{ missing_items|length }})
+  </h2>
+  <span style="font-size: 0.85rem; color: #64748b;">
+    Click <strong>+ Create Voucher</strong> to manually insert a missing number in sequence
+  </span>
+</div>
+
+<table class="erp-report" id="missing-table">
+  <thead>
+    <tr>
+      <th style="width: 60px;">#</th>
+      <th>Missing Voucher No</th>
+      <th>Voucher Type</th>
+      <th>Sequence No</th>
+      <th>Preceding Voucher</th>
+      <th>Following Voucher</th>
+      <th style="text-align: right;">Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for item in missing_items %}
+    <tr>
+      <td>{{ forloop.counter }}</td>
+      <td>
+        <span class="missing-tag">{{ item.missing_voucher_no }}</span>
+      </td>
+      <td>
+        <span class="vtype-pill">{{ item.voucher_type_name }}</span>
+      </td>
+      <td><strong>{{ item.missing_number }}</strong></td>
+      <td><span style="color: #64748b; font-size: 0.85rem;">{{ item.prev_existing }}</span></td>
+      <td><span style="color: #64748b; font-size: 0.85rem;">{{ item.next_existing }}</span></td>
+      <td style="text-align: right;">
+        <a href="{{ item.create_url }}" class="btn-create-voucher" title="Open creation form with {{ item.missing_voucher_no }}">
+          + Create Voucher
+        </a>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="clean-state-box">
+  <div class="clean-state-icon">🎉</div>
+  <h3>No Missing Numbers Detected!</h3>
+  <p>All voucher sequences are strictly sequential. There are currently no gaps in your voucher series.</p>
+</div>
+{% endif %}
+
+<script>
+function filterMissingTable() {
+  var input = document.getElementById("id_search");
+  var filter = input.value.toUpperCase();
+  var table = document.getElementById("missing-table");
+  if (!table) return;
+  var tr = table.getElementsByTagName("tr");
+  for (var i = 1; i < tr.length; i++) {
+    var txtValue = tr[i].textContent || tr[i].innerText;
+    if (txtValue.toUpperCase().indexOf(filter) > -1) {
+      tr[i].style.display = "";
+    } else {
+      tr[i].style.display = "none";
+    }
+  }
+}
+</script>
+{% endblock %}

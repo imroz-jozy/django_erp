@@ -13,6 +13,7 @@
       <th class="num">Tax</th>
       <th class="num">Sundry</th>
       <th class="num">Net</th>
+      {% if show_print_link %}<th>Print</th>{% endif %}
     </tr>
   </thead>
   <tbody>
@@ -21,7 +22,7 @@
       <td>{{ row.voucher.date }}</td>
       <td>
         {% with url=row.voucher|admin_url %}
-        {% if url %}<a href="{{ url }}">{% firstof row.voucher.invoice_no row.voucher.voucher_no %}</a>{% else %}{% firstof row.voucher.invoice_no row.voucher.voucher_no %}{% endif %}
+        {% if url %}<a href="{{ url }}">{{ row.voucher|report_vno }}</a>{% else %}{{ row.voucher|report_vno }}{% endif %}
         {% endwith %}
       </td>
       <td>{% firstof row.voucher.sale_type row.voucher.purchase_type %}</td>
@@ -30,12 +31,13 @@
       <td class="num">{{ row.totals.tax_amount }}</td>
       <td class="num">{{ row.totals.sundry_amount }}</td>
       <td class="num">{{ row.totals.net_amount }}</td>
+      {% if show_print_link %}<td><a href="{% url 'admin:masters_sale_print' row.voucher.pk %}?autoprint=1" target="_blank" rel="noopener">Print</a></td>{% endif %}
     </tr>
     {% empty %}
-    <tr><td colspan="8">No vouchers in this period.</td></tr>
+    <tr><td colspan="{% if show_print_link %}9{% else %}8{% endif %}">No vouchers in this period.</td></tr>
     {% endfor %}
     <tr class="total">
-      <td colspan="7">Total</td>
+      <td colspan="{% if show_print_link %}8{% else %}7{% endif %}">Total</td>
       <td class="num">{{ total }}</td>
     </tr>
   </tbody>

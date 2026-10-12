@@ -1,0 +1,143 @@
+<!doctype html>
+{% load i18n %}
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ document_title }} {{ voucher_number }}</title>
+  <style>
+    @page { size: A4 portrait; margin: 12mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #eef1f5; color: #172033; font: 13px/1.45 Arial, sans-serif; }
+    .toolbar { display: flex; justify-content: center; gap: 10px; padding: 16px; }
+    .toolbar button { border: 0; border-radius: 5px; padding: 10px 18px; background: #173b67; color: #fff; font-weight: 700; cursor: pointer; }
+    .toolbar .back { background: #596579; }
+    .paper { width: 210mm; min-height: 270mm; margin: 0 auto 24px; padding: 12mm; background: white; box-shadow: 0 4px 24px #1a29401f; }
+    .brand { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; padding-bottom: 16px; border-bottom: 2px solid #173b67; }
+    .brand h1 { margin: 0 0 5px; color: #173b67; font-size: 23px; line-height: 1.15; }
+    .brand p { margin: 2px 0; color: #4b5565; }
+    .doc-mark { min-width: 175px; text-align: right; }
+    .doc-mark .kind { color: #173b67; font-size: 17px; font-weight: 800; letter-spacing: .07em; }
+    .doc-mark .number { margin-top: 7px; font-size: 14px; font-weight: 700; }
+    .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; padding: 12px 0; border-bottom: 1px solid #d9dee7; }
+    .meta div { min-width: 0; }
+    .label { color: #667085; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+    .party-box { margin: 14px 0; padding: 10px 12px; border: 1px solid #d9dee7; border-radius: 4px; }
+    .party-box strong { display: block; margin: 3px 0; font-size: 15px; }
+    .party-box p { margin: 2px 0; color: #475467; }
+    table { width: 100%; border-collapse: collapse; }
+    .lines { margin-top: 12px; }
+    th { padding: 8px 6px; background: #173b67; color: white; text-align: left; font-size: 10px; text-transform: uppercase; }
+    td { padding: 7px 6px; border-bottom: 1px solid #e2e6ed; vertical-align: top; }
+    .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .lines tbody tr:nth-child(even) { background: #f7f9fc; }
+    .totals-wrap { display: flex; justify-content: flex-end; margin-top: 12px; }
+    .totals { width: 290px; }
+    .totals td { padding: 5px 7px; border: 0; }
+    .totals tr.final { border-top: 2px solid #173b67; font-size: 16px; font-weight: 800; }
+    .narration { margin-top: 18px; padding: 10px 12px; background: #f7f9fc; border-left: 3px solid #c4921f; }
+    .signatures { display: flex; justify-content: space-between; gap: 30px; margin-top: 54px; }
+    .signatures div { width: 220px; padding-top: 7px; border-top: 1px solid #98a2b3; text-align: center; color: #667085; }
+    .empty { color: #667085; text-align: center; padding: 18px; }
+    @media print {
+      body { background: #fff; }
+      .toolbar { display: none !important; }
+      .paper { width: auto; min-height: 0; margin: 0; padding: 0; box-shadow: none; }
+      thead { display: table-header-group; }
+      tr, .party-box, .brand, .meta, .narration { break-inside: avoid; }
+    }
+    @media screen and (max-width: 760px) {
+      .paper { width: 100%; min-height: 0; margin: 0; padding: 20px; }
+      .brand { flex-direction: column; }
+      .doc-mark { text-align: left; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <button type="button" onclick="window.print()">Print voucher</button>
+    <button type="button" class="back" onclick="history.back()">Back to voucher</button>
+  </div>
+
+  <main class="paper">
+    <header class="brand">
+      <div>
+        <h1>{% if company %}{{ company.trade_name|default:company.legal_name }}{% else %}{{ site_header|default:'Business' }}{% endif %}</h1>
+        {% if company.address %}<p>{{ company.address|linebreaksbr }}</p>{% endif %}
+        {% if company.state %}<p>{{ company.state }}</p>{% endif %}
+        {% if company.gstin %}<p><b>GSTIN:</b> {{ company.gstin }}</p>{% endif %}
+      </div>
+      <div class="doc-mark">
+        <div class="kind">{{ document_title }}</div>
+        <div class="number">No. {{ voucher_number }}</div>
+      </div>
+    </header>
+
+    <section class="meta">
+      <div><div class="label">Voucher date</div><b>{{ voucher.date|date:'d M Y' }}</b></div>
+      {% if type_name %}<div><div class="label">Transaction type</div><b>{{ type_name }}</b></div>{% endif %}
+      {% if reference %}<div><div class="label">Against document</div><b>{{ reference }}</b></div>{% endif %}
+      {% if through %}<div><div class="label">{{ through_label|default:'Cash / Bank' }}</div><b>{{ through.account_name }}</b></div>{% endif %}
+    </section>
+
+    {% if party %}
+    <section class="party-box">
+      <div class="label">{{ party_label }}</div>
+      <strong>{{ party.account_name }}</strong>
+      {% if party.address %}<p>{{ party.address|linebreaksbr }}</p>{% endif %}
+      {% if party.state %}<p>{{ party.state }}</p>{% endif %}
+      {% if party.gst %}<p><b>GSTIN:</b> {{ party.gst }}</p>{% endif %}
+      {% if party.mobile_no %}<p><b>Phone:</b> {{ party.mobile_no }}</p>{% endif %}
+    </section>
+    {% endif %}
+
+    {% if is_item_voucher %}
+    <table class="lines">
+      <thead><tr><th>#</th><th>Item / Description</th><th>HSN</th><th class="num">Qty</th><th>Unit</th><th class="num">Rate</th><th class="num">Disc.</th><th class="num">GST %</th><th class="num">Amount</th></tr></thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td>{{ forloop.counter }}</td><td>{{ row.item.item_name }}</td><td>{{ row.item.hsn|default:'-' }}</td>
+          <td class="num">{{ row.quantity|floatformat:2 }}{% if row.free_quantity %}<br><small>+ {{ row.free_quantity|floatformat:2 }} free</small>{% endif %}</td>
+          <td>{{ row.unit.print_name|default:row.unit.name|default:'-' }}</td><td class="num">Rs. {{ row.rate|floatformat:2 }}</td>
+          <td class="num">{{ row.discount|floatformat:2 }}</td><td class="num">{{ row.tax|floatformat:2 }}</td><td class="num">Rs. {{ row.amount|floatformat:2 }}</td>
+        </tr>
+        {% empty %}<tr><td colspan="9" class="empty">No item lines</td></tr>{% endfor %}
+      </tbody>
+    </table>
+    <div class="totals-wrap"><table class="totals">
+      <tr><td>Item basic</td><td class="num">Rs. {{ totals.item_basic_amount|floatformat:2 }}</td></tr>
+      <tr><td>Item discount</td><td class="num">Rs. {{ totals.item_discount_amount|floatformat:2 }}</td></tr>
+      <tr><td>Taxable amount</td><td class="num">Rs. {{ totals.item_amount|floatformat:2 }}</td></tr>
+      <tr><td>Tax</td><td class="num">Rs. {{ totals.tax_amount|floatformat:2 }}</td></tr>
+      {% for sundry in sundries %}<tr><td>{{ sundry.name }}</td><td class="num">Rs. {{ sundry.amount|floatformat:2 }}</td></tr>{% endfor %}
+      <tr class="final"><td>Grand total</td><td class="num">Rs. {{ totals.net_amount|floatformat:2 }}</td></tr>
+    </table></div>
+    {% else %}
+    <table class="lines">
+      <thead><tr><th>#</th><th>Account / Particulars</th>{% if is_journal %}<th class="num">Debit</th><th class="num">Credit</th>{% else %}<th class="num">Amount</th>{% endif %}<th>Remarks</th></tr></thead>
+      <tbody>
+        {% for row in rows %}
+        <tr><td>{{ forloop.counter }}</td><td>{{ row.account.account_name }}</td>
+          {% if is_journal %}<td class="num">Rs. {{ row.debit|floatformat:2 }}</td><td class="num">Rs. {{ row.credit|floatformat:2 }}</td>
+          {% else %}<td class="num">Rs. {{ row.amount|floatformat:2 }}</td>{% endif %}<td>{{ row.remarks|default:'' }}</td></tr>
+        {% empty %}<tr><td colspan="5" class="empty">No account lines</td></tr>{% endfor %}
+      </tbody>
+    </table>
+    <div class="totals-wrap"><table class="totals">
+      {% if is_journal %}
+      <tr><td>Total debit</td><td class="num">Rs. {{ totals.debit|floatformat:2 }}</td></tr><tr class="final"><td>Total credit</td><td class="num">Rs. {{ totals.credit|floatformat:2 }}</td></tr>
+      {% else %}<tr class="final"><td>Total amount</td><td class="num">Rs. {{ totals.net_amount|floatformat:2 }}</td></tr>{% endif %}
+    </table></div>
+    {% endif %}
+
+    {% if voucher.narration %}<section class="narration"><div class="label">Narration</div>{{ voucher.narration }}</section>{% endif %}
+    <footer class="signatures"><div>Prepared by</div><div>Authorised signatory</div></footer>
+  </main>
+  <script>
+    if (new URLSearchParams(window.location.search).get("autoprint") === "1") {
+      window.addEventListener("load", function () { window.setTimeout(function () { window.print(); }, 250); });
+    }
+  </script>
+</body>
+</html>

@@ -30,6 +30,8 @@ from .models import (
     SaleReturn,
     SaleReturnBillSundry,
     SaleReturnItem,
+    VoucherSeriesConfig,
+    display_voucher_no_for_obj,
 )
 from .money import ZERO, money
 
@@ -534,7 +536,7 @@ def _sale_line_facts(sale_qs):
             cess = money(taxable * money(line.item.cess_rate or 0) / Decimal("100"))
             yield {
                 "date": sale.date,
-                "voucher_no": sale.invoice_no,
+                "voucher_no": display_voucher_no_for_obj(sale),
                 "account": sale.account,
                 "is_b2b": is_b2b,
                 "gstin": sale.account.gst,
@@ -565,7 +567,7 @@ def _sale_return_line_facts(sr_qs):
             cess = money(taxable * money(line.item.cess_rate or 0) / Decimal("100"))
             yield {
                 "date": sr.date,
-                "voucher_no": sr.voucher_no,
+                "voucher_no": display_voucher_no_for_obj(sr),
                 "account": sr.account,
                 "is_b2b": is_b2b,
                 "gstin": sr.account.gst,
@@ -733,7 +735,7 @@ def gst_outward_summary(date_from, date_to):
             {
                 "type": "Credit Note",
                 "date": cn.date,
-                "voucher_no": cn.voucher_no,
+                "voucher_no": display_voucher_no_for_obj(cn),
                 "account": cn.account,
                 "gstin": cn.account.gst,
                 "taxable": cn.total_amount,
@@ -1159,6 +1161,8 @@ def _append_entry(entries, date, vtype, vno, narration, debit, credit, voucher=N
     credit = money(credit)
     if debit == 0 and credit == 0:
         return
+    if voucher is not None:
+        vno = display_voucher_no_for_obj(voucher)
     entries.append(
         {
             "date": date,
@@ -1521,7 +1525,7 @@ def all_vouchers_register(date_from, date_to, vtype=None, account_id=None, min_a
             entries.append({
                 "date": s.date,
                 "vtype": "Sale",
-                "voucher_no": s.invoice_no,
+                "voucher_no": display_voucher_no_for_obj(s),
                 "account": s.account,
                 "account_name": s.account.account_name if s.account else "",
                 "narration": s.narration or "",
@@ -1542,7 +1546,7 @@ def all_vouchers_register(date_from, date_to, vtype=None, account_id=None, min_a
             entries.append({
                 "date": p.date,
                 "vtype": "Purchase",
-                "voucher_no": p.invoice_no,
+                "voucher_no": display_voucher_no_for_obj(p),
                 "account": p.account,
                 "account_name": p.account.account_name if p.account else "",
                 "narration": p.narration or "",
@@ -1563,7 +1567,7 @@ def all_vouchers_register(date_from, date_to, vtype=None, account_id=None, min_a
             entries.append({
                 "date": p.date,
                 "vtype": "Payment",
-                "voucher_no": p.voucher_no,
+                "voucher_no": display_voucher_no_for_obj(p),
                 "account": p.through,
                 "account_name": f"{party_names} (via {p.through.account_name if p.through else ''})" if party_names else (p.through.account_name if p.through else ""),
                 "narration": p.narration or "",
@@ -1584,7 +1588,7 @@ def all_vouchers_register(date_from, date_to, vtype=None, account_id=None, min_a
             entries.append({
                 "date": r.date,
                 "vtype": "Receipt",
-                "voucher_no": r.voucher_no,
+                "voucher_no": display_voucher_no_for_obj(r),
                 "account": r.through,
                 "account_name": f"{party_names} (into {r.through.account_name if r.through else ''})" if party_names else (r.through.account_name if r.through else ""),
                 "narration": r.narration or "",
@@ -1606,7 +1610,7 @@ def all_vouchers_register(date_from, date_to, vtype=None, account_id=None, min_a
             entries.append({
                 "date": j.date,
                 "vtype": "Journal",
-                "voucher_no": j.voucher_no,
+                "voucher_no": display_voucher_no_for_obj(j),
                 "account": None,
                 "account_name": party_names,
                 "narration": j.narration or "",
@@ -1627,7 +1631,7 @@ def all_vouchers_register(date_from, date_to, vtype=None, account_id=None, min_a
             entries.append({
                 "date": sr.date,
                 "vtype": "Sale Return",
-                "voucher_no": sr.voucher_no,
+                "voucher_no": display_voucher_no_for_obj(sr),
                 "account": sr.account,
                 "account_name": sr.account.account_name if sr.account else "",
                 "narration": sr.narration or "",
@@ -1648,7 +1652,7 @@ def all_vouchers_register(date_from, date_to, vtype=None, account_id=None, min_a
             entries.append({
                 "date": pr.date,
                 "vtype": "Purchase Return",
-                "voucher_no": pr.voucher_no,
+                "voucher_no": display_voucher_no_for_obj(pr),
                 "account": pr.account,
                 "account_name": pr.account.account_name if pr.account else "",
                 "narration": pr.narration or "",
@@ -1668,7 +1672,7 @@ def all_vouchers_register(date_from, date_to, vtype=None, account_id=None, min_a
             entries.append({
                 "date": cn.date,
                 "vtype": "Credit Note",
-                "voucher_no": cn.voucher_no,
+                "voucher_no": display_voucher_no_for_obj(cn),
                 "account": cn.account,
                 "account_name": cn.account.account_name if cn.account else "",
                 "narration": cn.narration or "",
@@ -1688,7 +1692,7 @@ def all_vouchers_register(date_from, date_to, vtype=None, account_id=None, min_a
             entries.append({
                 "date": dn.date,
                 "vtype": "Debit Note",
-                "voucher_no": dn.voucher_no,
+                "voucher_no": display_voucher_no_for_obj(dn),
                 "account": dn.account,
                 "account_name": dn.account.account_name if dn.account else "",
                 "narration": dn.narration or "",
@@ -1873,7 +1877,7 @@ def item_stock_ledger(item, date_from, date_to):
         entries.append({
             "date": line.purchase.date,
             "vtype": "Purchase",
-            "voucher_no": line.purchase.invoice_no,
+            "voucher_no": display_voucher_no_for_obj(line.purchase),
             "party": line.purchase.account,
             "party_name": line.purchase.account.account_name if line.purchase.account else "",
             "inward_qty": line.total_quantity,
@@ -1890,7 +1894,7 @@ def item_stock_ledger(item, date_from, date_to):
         entries.append({
             "date": line.sale_return.date,
             "vtype": "Sale Return",
-            "voucher_no": line.sale_return.voucher_no,
+            "voucher_no": display_voucher_no_for_obj(line.sale_return),
             "party": line.sale_return.account,
             "party_name": line.sale_return.account.account_name if line.sale_return.account else "",
             "inward_qty": line.total_quantity,
@@ -1907,7 +1911,7 @@ def item_stock_ledger(item, date_from, date_to):
         entries.append({
             "date": line.sale.date,
             "vtype": "Sale",
-            "voucher_no": line.sale.invoice_no,
+            "voucher_no": display_voucher_no_for_obj(line.sale),
             "party": line.sale.account,
             "party_name": line.sale.account.account_name if line.sale.account else "",
             "inward_qty": ZERO,
@@ -1924,7 +1928,7 @@ def item_stock_ledger(item, date_from, date_to):
         entries.append({
             "date": line.purchase_return.date,
             "vtype": "Purchase Return",
-            "voucher_no": line.purchase_return.voucher_no,
+            "voucher_no": display_voucher_no_for_obj(line.purchase_return),
             "party": line.purchase_return.account,
             "party_name": line.purchase_return.account.account_name if line.purchase_return.account else "",
             "inward_qty": ZERO,
@@ -2004,7 +2008,7 @@ def item_sales_register(date_from, date_to, item_id=None, account_id=None, group
 
         rows.append({
             "date": sale.date,
-            "voucher_no": sale.invoice_no,
+            "voucher_no": display_voucher_no_for_obj(sale),
             "voucher_url": _voucher_admin_url(sale),
             "party": sale.account,
             "party_name": sale.account.account_name if sale.account else "",
@@ -2015,11 +2019,9 @@ def item_sales_register(date_from, date_to, item_id=None, account_id=None, group
             "free_qty": line.free_quantity,
             "total_qty": line.total_quantity,
             "unit": line.unit.name if line.unit else (line.item.main_unit.name if (line.item and line.item.main_unit) else ""),
-            "price": line.price,
-            "discount_pct": line.discount_percent,
-            "discount_amt": line.discount_amount,
+            "price": line.rate,
             "taxable_amount": line_amts["amount_after_discount"],
-            "tax_rate": line.tax_rate,
+            "tax_rate": line.tax,
             "tax_amount": line_amts["tax_amount"],
             "net_amount": line_amts["net_amount"],
         })
@@ -2064,7 +2066,7 @@ def item_purchase_register(date_from, date_to, item_id=None, account_id=None, gr
 
         rows.append({
             "date": purchase.date,
-            "voucher_no": purchase.invoice_no,
+            "voucher_no": display_voucher_no_for_obj(purchase),
             "voucher_url": _voucher_admin_url(purchase),
             "party": purchase.account,
             "party_name": purchase.account.account_name if purchase.account else "",
@@ -2075,11 +2077,9 @@ def item_purchase_register(date_from, date_to, item_id=None, account_id=None, gr
             "free_qty": line.free_quantity,
             "total_qty": line.total_quantity,
             "unit": line.unit.name if line.unit else (line.item.main_unit.name if (line.item and line.item.main_unit) else ""),
-            "price": line.price,
-            "discount_pct": line.discount_percent,
-            "discount_amt": line.discount_amount,
+            "price": line.rate,
             "taxable_amount": line_amts["amount_after_discount"],
-            "tax_rate": line.tax_rate,
+            "tax_rate": line.tax,
             "tax_amount": line_amts["tax_amount"],
             "net_amount": line_amts["net_amount"],
         })
@@ -2123,7 +2123,7 @@ def item_sale_return_register(date_from, date_to, item_id=None, account_id=None,
 
         rows.append({
             "date": sr.date,
-            "voucher_no": sr.voucher_no,
+            "voucher_no": display_voucher_no_for_obj(sr),
             "voucher_url": _voucher_admin_url(sr),
             "party": sr.account,
             "party_name": sr.account.account_name if sr.account else "",
@@ -2134,8 +2134,9 @@ def item_sale_return_register(date_from, date_to, item_id=None, account_id=None,
             "free_qty": line.free_quantity,
             "total_qty": line.total_quantity,
             "unit": line.unit.name if line.unit else (line.item.main_unit.name if (line.item and line.item.main_unit) else ""),
-            "price": line.price,
+            "price": line.rate,
             "taxable_amount": line_amts["amount_after_discount"],
+            "tax_rate": line.tax,
             "tax_amount": line_amts["tax_amount"],
             "net_amount": line_amts["net_amount"],
         })
@@ -2179,7 +2180,7 @@ def item_purchase_return_register(date_from, date_to, item_id=None, account_id=N
 
         rows.append({
             "date": pr.date,
-            "voucher_no": pr.voucher_no,
+            "voucher_no": display_voucher_no_for_obj(pr),
             "voucher_url": _voucher_admin_url(pr),
             "party": pr.account,
             "party_name": pr.account.account_name if pr.account else "",
@@ -2190,8 +2191,9 @@ def item_purchase_return_register(date_from, date_to, item_id=None, account_id=N
             "free_qty": line.free_quantity,
             "total_qty": line.total_quantity,
             "unit": line.unit.name if line.unit else (line.item.main_unit.name if (line.item and line.item.main_unit) else ""),
-            "price": line.price,
+            "price": line.rate,
             "taxable_amount": line_amts["amount_after_discount"],
+            "tax_rate": line.tax,
             "tax_amount": line_amts["tax_amount"],
             "net_amount": line_amts["net_amount"],
         })
@@ -2704,3 +2706,195 @@ def outstanding_report(as_on, account_id=None):
         "net_label": "Net Receivable" if net >= 0 else "Net Payable",
         "party_choices": party_choices,
     }
+
+
+# =========================================================
+# MISSING VOUCHER NUMBERS REPORT
+# =========================================================
+
+VOUCHER_TYPE_MODEL_MAP = {
+    VoucherSeriesConfig.VoucherType.SALE: {
+        "model": Sale,
+        "field": "invoice_no",
+        "date_field": "date",
+        "add_url_name": "admin:masters_sale_add",
+        "param_name": "invoice_no",
+        "label": "Sale",
+    },
+    VoucherSeriesConfig.VoucherType.PURCHASE: {
+        "model": Purchase,
+        "field": "invoice_no",
+        "date_field": "date",
+        "add_url_name": "admin:masters_purchase_add",
+        "param_name": "invoice_no",
+        "label": "Purchase",
+    },
+    VoucherSeriesConfig.VoucherType.SALE_RETURN: {
+        "model": SaleReturn,
+        "field": "voucher_no",
+        "date_field": "date",
+        "add_url_name": "admin:masters_salereturn_add",
+        "param_name": "voucher_no",
+        "label": "Sale Return",
+    },
+    VoucherSeriesConfig.VoucherType.PURCHASE_RETURN: {
+        "model": PurchaseReturn,
+        "field": "voucher_no",
+        "date_field": "date",
+        "add_url_name": "admin:masters_purchasereturn_add",
+        "param_name": "voucher_no",
+        "label": "Purchase Return",
+    },
+    VoucherSeriesConfig.VoucherType.PAYMENT: {
+        "model": Payment,
+        "field": "voucher_no",
+        "date_field": "date",
+        "add_url_name": "admin:masters_payment_add",
+        "param_name": "voucher_no",
+        "label": "Payment",
+    },
+    VoucherSeriesConfig.VoucherType.RECEIPT: {
+        "model": Receipt,
+        "field": "voucher_no",
+        "date_field": "date",
+        "add_url_name": "admin:masters_receipt_add",
+        "param_name": "voucher_no",
+        "label": "Receipt",
+    },
+    VoucherSeriesConfig.VoucherType.JOURNAL: {
+        "model": Journal,
+        "field": "voucher_no",
+        "date_field": "date",
+        "add_url_name": "admin:masters_journal_add",
+        "param_name": "voucher_no",
+        "label": "Journal",
+    },
+    VoucherSeriesConfig.VoucherType.CREDIT_NOTE: {
+        "model": CreditNote,
+        "field": "voucher_no",
+        "date_field": "date",
+        "add_url_name": "admin:masters_creditnote_add",
+        "param_name": "voucher_no",
+        "label": "Credit Note",
+    },
+    VoucherSeriesConfig.VoucherType.DEBIT_NOTE: {
+        "model": DebitNote,
+        "field": "voucher_no",
+        "date_field": "date",
+        "add_url_name": "admin:masters_debitnote_add",
+        "param_name": "voucher_no",
+        "label": "Debit Note",
+    },
+}
+
+
+def missing_vouchers_report(selected_voucher_type=None):
+    """Scan voucher sequence numbers across all or selected series to find gaps."""
+    configs = list(VoucherSeriesConfig.objects.all().order_by("voucher_type"))
+    if selected_voucher_type:
+        configs = [c for c in configs if c.voucher_type == selected_voucher_type]
+
+    series_cards = []
+    missing_items = []
+    total_existing_vouchers = 0
+    total_missing_count = 0
+
+    for cfg in configs:
+        meta = VOUCHER_TYPE_MODEL_MAP.get(cfg.voucher_type)
+        if not meta:
+            continue
+        model = meta["model"]
+        field_name = meta["field"]
+        date_field = meta["date_field"]
+        prefix = cfg.prefix or ""
+        suffix = cfg.suffix or ""
+
+        # Fetch all existing vouchers for this model
+        qs = model.objects.values_list("pk", field_name, date_field).order_by(date_field, "pk")
+        existing_map = {}
+        for pk, raw_vno, vdate in qs:
+            num = cfg.parse_number(raw_vno)
+            if num is None:
+                continue
+            existing_map[num] = {
+                "pk": pk,
+                "voucher_no": cfg._format_number(num),
+                "date": vdate,
+            }
+
+        total_existing_vouchers += len(existing_map)
+
+        # Sequence ceiling & floor
+        max_num = max(existing_map.keys()) if existing_map else 0
+        min_num = min(existing_map.keys()) if existing_map else cfg.starting_number
+        start = min(cfg.starting_number, min_num) if existing_map else cfg.starting_number
+        end = max(cfg.current_number, max_num)
+
+        series_missing_nums = []
+        if end >= start:
+            all_expected = set(range(start, end + 1))
+            series_missing_nums = sorted(all_expected - set(existing_map.keys()))
+
+        total_missing_count += len(series_missing_nums)
+
+        # Build missing entries with context
+        for n in series_missing_nums:
+            formatted_no = cfg._format_number(n)
+            prev_num = max((x for x in existing_map if x < n), default=None)
+            next_num = min((x for x in existing_map if x > n), default=None)
+            prev_info = f"{existing_map[prev_num]['voucher_no']} ({existing_map[prev_num]['date']})" if prev_num else "None (Start)"
+            next_info = f"{existing_map[next_num]['voucher_no']} ({existing_map[next_num]['date']})" if next_num else "None (End)"
+
+            try:
+                base_add_url = reverse(meta["add_url_name"])
+                stored_no = cfg._stored_number(n)
+                add_url = f"{base_add_url}?{meta['param_name']}={stored_no}"
+            except Exception:
+                add_url = "#"
+
+            missing_items.append({
+                "voucher_type": cfg.voucher_type,
+                "voucher_type_name": cfg.get_voucher_type_display(),
+                "missing_number": n,
+                "missing_voucher_no": formatted_no,
+                "prefix": prefix,
+                "suffix": suffix,
+                "prev_existing": prev_info,
+                "next_existing": next_info,
+                "create_url": add_url,
+            })
+
+        # Next sample
+        next_n = cfg.starting_number if cfg.current_number == 0 else cfg.current_number + 1
+        next_sample = cfg._format_number(next_n)
+
+        series_cards.append({
+            "voucher_type": cfg.voucher_type,
+            "name": cfg.get_voucher_type_display(),
+            "prefix": prefix,
+            "suffix": suffix,
+            "starting_number": cfg.starting_number,
+            "current_number": cfg.current_number,
+            "next_voucher_no": next_sample,
+            "number_width": cfg.number_width,
+            "is_auto": cfg.is_auto,
+            "vouchers_count": len(existing_map),
+            "missing_count": len(series_missing_nums),
+            "has_gaps": len(series_missing_nums) > 0,
+            "first_no": cfg._format_number(min_num) if existing_map else "-",
+            "last_no": cfg._format_number(max_num) if existing_map else "-",
+        })
+
+    type_choices = [("", "All Voucher Types")] + list(VoucherSeriesConfig.VoucherType.choices)
+
+    return {
+        "selected_voucher_type": selected_voucher_type or "",
+        "type_choices": type_choices,
+        "series_cards": series_cards,
+        "missing_items": missing_items,
+        "total_series": len(series_cards),
+        "total_vouchers": total_existing_vouchers,
+        "total_missing": total_missing_count,
+        "has_gaps": total_missing_count > 0,
+    }
+

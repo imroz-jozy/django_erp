@@ -10,7 +10,19 @@
 {% endif %}
 {% endblock %}
 
-{% block nav-global %}{% endblock %}
+{% block nav-global %}
+<div class="erp-global-nav" style="display: flex; align-items: center; gap: 10px; margin-left: 20px; flex-wrap: wrap;">
+  <a href="{% url 'admin:masters_voucherseriesconfig_changelist' %}" style="color: #f8fafc; font-weight: 600; font-size: 0.82rem; text-decoration: none; padding: 4px 10px; border-radius: 4px; background: rgba(59, 130, 246, 0.25); border: 1px solid rgba(59, 130, 246, 0.4);">
+    ⚙️ Voucher Series
+  </a>
+  <a href="{% url 'admin:erp_missing_vouchers' %}" style="color: #f8fafc; font-weight: 600; font-size: 0.82rem; text-decoration: none; padding: 4px 10px; border-radius: 4px; background: rgba(239, 68, 68, 0.25); border: 1px solid rgba(239, 68, 68, 0.4);">
+    🔍 Missing Vouchers
+  </a>
+  <a href="{% url 'admin:erp_reports_hub' %}" style="color: #f8fafc; font-weight: 600; font-size: 0.82rem; text-decoration: none; padding: 4px 10px; border-radius: 4px; background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2);">
+    📊 Reports Hub
+  </a>
+</div>
+{% endblock %}
 
 {% block extrastyle %}
 {{ block.super }}

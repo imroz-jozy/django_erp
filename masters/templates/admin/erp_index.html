@@ -11,6 +11,8 @@
     <a class="button" href="{% url 'admin:masters_receipt_add' %}">+ New Receipt</a>
     <a class="button" href="{% url 'admin:masters_journal_add' %}">+ New Journal</a>
     <a class="button" href="{% url 'admin:masters_item_add' %}">+ New Item</a>
+    <a class="button" href="{% url 'admin:masters_voucherseriesconfig_changelist' %}" style="background: #3b82f6; color: #fff; border-color: #2563eb; font-weight: 600;">⚙️ Voucher Series Config</a>
+    <a class="button" href="{% url 'admin:erp_missing_vouchers' %}" style="background: #ef4444; color: #fff; border-color: #dc2626; font-weight: 600;">🔍 Missing Vouchers</a>
   </div>
 
   {% if erp_dashboard %}
@@ -226,6 +228,54 @@
       </table>
     </div>
   </div>
+
+  <!-- Partition: Masters & Voucher Series Configuration -->
+  <div class="module" style="margin-bottom: 24px;">
+    <table>
+      <caption>⚙️ Masters &amp; Voucher Series Configuration (मास्टर्स और वाउचर सेटिंग्स)</caption>
+      <tr>
+        <th scope="row">
+          <a href="{% url 'admin:masters_voucherseriesconfig_changelist' %}" style="font-weight:700; color:#2563eb; font-size:0.95rem;">
+            ⚙️ Voucher Series Configuration (वाउचर सीरीज कॉन्फ़िगरेशन)
+          </a>
+        </th>
+        <td>Numeric voucher numbers; prefix/suffix (INV-, PMT-) show on reports only</td>
+      </tr>
+      <tr>
+        <th scope="row">
+          <a href="{% url 'admin:erp_missing_vouchers' %}" style="font-weight:700; color:#dc2626; font-size:0.95rem;">
+            🔍 Missing Voucher Numbers Report (छूटे हुए वाउचर रिपोर्ट)
+          </a>
+        </th>
+        <td>Find missing numbers across all series and 1-click create missing vouchers in sequence</td>
+      </tr>
+      <tr>
+        <th scope="row"><a href="{% url 'admin:masters_companyprofile_changelist' %}">Company Profile</a></th>
+        <td>Company name, trade name, GSTIN, and business address</td>
+      </tr>
+      <tr>
+        <th scope="row"><a href="{% url 'admin:masters_accountgroup_changelist' %}">Account Groups</a></th>
+        <td>Account grouping hierarchy and balance sheet nature</td>
+      </tr>
+      <tr>
+        <th scope="row"><a href="{% url 'admin:masters_account_changelist' %}">Accounts (Ledgers)</a></th>
+        <td>Parties, banks, expenses, and capital accounts</td>
+      </tr>
+      <tr>
+        <th scope="row"><a href="{% url 'admin:masters_item_changelist' %}">Items (Stock Inventory)</a></th>
+        <td>Products, services, units, prices, and GST rates</td>
+      </tr>
+      <tr>
+        <th scope="row"><a href="{% url 'admin:masters_saletype_changelist' %}">Sale Types</a> &amp; <a href="{% url 'admin:masters_purchasetype_changelist' %}">Purchase Types</a></th>
+        <td>Tax inclusive / exclusive, local &amp; interstate GST tax rules</td>
+      </tr>
+      <tr>
+        <th scope="row"><a href="{% url 'admin:masters_billsundry_changelist' %}">Bill Sundries</a></th>
+        <td>Round off, freight, discounts, and bill sundry formulas</td>
+      </tr>
+    </table>
+  </div>
+
   <div class="module">
     <table>
       <caption>Excel Data Import</caption>

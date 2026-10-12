@@ -58,6 +58,28 @@
   document.addEventListener("DOMContentLoaded", function () {
     applyNumericHints(document);
 
+    // Make each sidebar section expandable while keeping the active page visible.
+    document.querySelectorAll(".erp-nav-group .erp-nav-heading").forEach(function (heading) {
+      var links = [];
+      var sibling = heading.nextElementSibling;
+      while (sibling && !sibling.classList.contains("erp-nav-heading")) {
+        if (sibling.classList.contains("erp-nav-link")) links.push(sibling);
+        sibling = sibling.nextElementSibling;
+      }
+
+      var expanded = links.some(function (link) {
+        return link.classList.contains("is-active");
+      });
+      heading.setAttribute("aria-expanded", expanded ? "true" : "false");
+      links.forEach(function (link) { link.hidden = !expanded; });
+
+      heading.addEventListener("click", function () {
+        expanded = heading.getAttribute("aria-expanded") !== "true";
+        heading.setAttribute("aria-expanded", expanded ? "true" : "false");
+        links.forEach(function (link) { link.hidden = !expanded; });
+      });
+    });
+
     // First measurement after layout is complete.
     updateSubmitRowHeight();
 

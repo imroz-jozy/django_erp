@@ -1,4 +1,5 @@
 from decimal import Decimal
+from functools import lru_cache
 
 from django.core.validators import RegexValidator
 from django.db import models
@@ -237,6 +238,182 @@ class CompanyProfile(models.Model):
     def get_solo(cls):
         obj = cls.objects.filter(pk=1).first()
         return obj
+
+
+# =========================================================
+# VOUCHER SERIES CONFIG
+# =========================================================
+
+class VoucherSeriesConfig(models.Model):
+    """Numbering configuration for every voucher type.
+
+    Voucher screens store a numeric invoice/voucher number only
+    (optionally zero-padded), e.g. width=4, current_number=7 → '0007'.
+    Prefix and suffix are applied on reports only, e.g. 'INV-0007'.
+
+    When a voucher is saved with a manually typed number the counter is
+    automatically advanced so that the next auto-number never re-uses it.
+    The 'Missing Numbers' report reads these configs to find gaps.
+    """
+
+    class VoucherType(models.TextChoices):
+        SALE             = "SALE",            "Sale"
+        PURCHASE         = "PURCHASE",        "Purchase"
+        SALE_RETURN      = "SALE_RETURN",     "Sale Return"
+        PURCHASE_RETURN  = "PURCHASE_RETURN", "Purchase Return"
+        PAYMENT          = "PAYMENT",         "Payment"
+        RECEIPT          = "RECEIPT",         "Receipt"
+        JOURNAL          = "JOURNAL",         "Journal"
+        CREDIT_NOTE      = "CREDIT_NOTE",     "Credit Note"
+        DEBIT_NOTE       = "DEBIT_NOTE",      "Debit Note"
+
+    voucher_type = models.CharField(
+        max_length=20,
+        choices=VoucherType.choices,
+        unique=True,
+        verbose_name="Voucher Type",
+    )
+    prefix = models.CharField(
+        max_length=20,
+        blank=True,
+        help_text="Shown on reports only, before the number. e.g. 'INV-' → INV-0001. Not stored on the voucher.",
+    )
+    suffix = models.CharField(
+        max_length=20,
+        blank=True,
+        help_text="Shown on reports only, after the number. e.g. '/26' → 0001/26. Not stored on the voucher.",
+    )
+    number_width = models.PositiveSmallIntegerField(
+        default=4,
+        help_text="Minimum digits (zero-padded). 4 → '0001'. 0 = no padding.",
+    )
+    starting_number = models.PositiveIntegerField(
+        default=1,
+        help_text="The very first number to use when the counter is reset or the series is new.",
+    )
+    current_number = models.PositiveIntegerField(
+        default=0,
+        help_text=(
+            "Internal counter. 0 = not yet started (first voucher gets Starting Number). "
+            "Set to 0 to restart from Starting Number. "
+            "The NEXT auto-generated voucher will be current_number + 1 (or Starting Number if 0)."
+        ),
+    )
+    is_auto = models.BooleanField(
+        default=True,
+        verbose_name="Auto-number new vouchers",
+        help_text=(
+            "When ticked, new vouchers get an auto-generated number. "
+            "Untick to always leave the number blank so you can type it yourself."
+        ),
+    )
+
+    class Meta:
+        ordering = ["voucher_type"]
+        verbose_name = "Voucher Series Config"
+        verbose_name_plural = "Voucher Series Configs"
+
+    def __str__(self):
+        n = self.current_number if self.current_number else self.starting_number
+        return f"{self.get_voucher_type_display()} → {self._stored_number(n)} (reports: {self._format_number(n)})"
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        _cached_series_config.cache_clear()
+
+    def _stored_number(self, n):
+        """Numeric value stored on the voucher (zero-padded, no prefix/suffix)."""
+        w = max(0, self.number_width or 0)
+        return str(n).zfill(w) if w else str(n)
+
+    def _format_number(self, n):
+        """Report display: prefix + padded number + suffix."""
+        return f"{self.prefix}{self._stored_number(n)}{self.suffix}"
+
+    def parse_number(self, val):
+        """Extract the integer from a stored numeric no. or a legacy prefixed value."""
+        if val is None:
+            return None
+        stripped = str(val).strip()
+        if not stripped:
+            return None
+        prefix = self.prefix or ""
+        suffix = self.suffix or ""
+        core = stripped
+        if prefix and core.startswith(prefix):
+            core = core[len(prefix):]
+        if suffix and core.endswith(suffix):
+            core = core[: -len(suffix)]
+        if core.isdigit():
+            return int(core)
+        if stripped.isdigit():
+            return int(stripped)
+        return None
+
+    def next_number_str(self):
+        """Allocate and return the next numeric voucher number string.
+
+        Increments current_number atomically and saves. Thread-safe via
+        select_for_update (caller must be inside a DB transaction for full
+        safety, which Django admin's POST handling already is).
+        """
+        from django.db import transaction
+        with transaction.atomic():
+            cfg = VoucherSeriesConfig.objects.select_for_update().get(pk=self.pk)
+            if cfg.current_number == 0:
+                next_n = cfg.starting_number
+            else:
+                next_n = cfg.current_number + 1
+            cfg.current_number = next_n
+            cfg.save(update_fields=["current_number"])
+            self.current_number = next_n
+        return self._stored_number(next_n)
+
+    def sync_counter_from_existing(self):
+        """Scan existing voucher numbers for this type and advance
+        current_number past the highest numeric value found.
+        Call this after manually entering vouchers so auto-numbers
+        never collide."""
+        highest = self._scan_highest_number()
+        if highest is not None and highest > self.current_number:
+            self.current_number = highest
+            self.save(update_fields=["current_number"])
+
+    def _scan_highest_number(self):
+        """Return the highest *integer* embedded in existing voucher numbers
+        for this voucher type, by stripping prefix/suffix and parsing.
+        Returns None if no vouchers exist or none match the pattern."""
+        import re
+        vt = self.voucher_type
+        # Map VoucherType → (model, number_field_name)
+        from django.apps import apps
+        type_map = {
+            VoucherSeriesConfig.VoucherType.SALE:            ("masters", "sale",           "invoice_no"),
+            VoucherSeriesConfig.VoucherType.PURCHASE:        ("masters", "purchase",       "invoice_no"),
+            VoucherSeriesConfig.VoucherType.SALE_RETURN:     ("masters", "salereturn",     "voucher_no"),
+            VoucherSeriesConfig.VoucherType.PURCHASE_RETURN: ("masters", "purchasereturn", "voucher_no"),
+            VoucherSeriesConfig.VoucherType.PAYMENT:         ("masters", "payment",        "voucher_no"),
+            VoucherSeriesConfig.VoucherType.RECEIPT:         ("masters", "receipt",        "voucher_no"),
+            VoucherSeriesConfig.VoucherType.JOURNAL:         ("masters", "journal",        "voucher_no"),
+            VoucherSeriesConfig.VoucherType.CREDIT_NOTE:     ("masters", "creditnote",     "voucher_no"),
+            VoucherSeriesConfig.VoucherType.DEBIT_NOTE:      ("masters", "debitnote",      "voucher_no"),
+        }
+        if vt not in type_map:
+            return None
+        app_label, model_name, field_name = type_map[vt]
+        try:
+            model = apps.get_model(app_label, model_name)
+        except Exception:
+            return None
+        qs = model.objects.values_list(field_name, flat=True)
+        highest = None
+        for val in qs:
+            n = self.parse_number(val)
+            if n is None:
+                continue
+            if highest is None or n > highest:
+                highest = n
+        return highest
 
 
 # =========================================================
@@ -1028,11 +1205,23 @@ class Sale(models.Model):
         return self.invoice_no
 
     def save(self, *args, **kwargs):
+        is_new = not self.pk
+        if self.invoice_no:
+            self.invoice_no = _normalize_voucher_no(
+                VoucherSeriesConfig.VoucherType.SALE, self.invoice_no
+            )
+        elif is_new:
+            self.invoice_no = _next_voucher_no_for_type(
+                VoucherSeriesConfig.VoucherType.SALE, Sale, "INV-"
+            )
         if not self.sale_type_id:
             default_type = _guess_sale_type(self.account_id)
             if default_type:
                 self.sale_type = default_type
         super().save(*args, **kwargs)
+        # Sync counter when user manually typed a number on a new voucher
+        if is_new and self.invoice_no:
+            _sync_manual_voucher_no(VoucherSeriesConfig.VoucherType.SALE, self.invoice_no)
 
     def totals(self):
         tax_inclusive = bool(self.sale_type_id and self.sale_type.tax_inclusive)
@@ -1145,11 +1334,22 @@ class Purchase(models.Model):
         return self.invoice_no
 
     def save(self, *args, **kwargs):
+        is_new = not self.pk
+        if self.invoice_no:
+            self.invoice_no = _normalize_voucher_no(
+                VoucherSeriesConfig.VoucherType.PURCHASE, self.invoice_no
+            )
+        elif is_new:
+            self.invoice_no = _next_voucher_no_for_type(
+                VoucherSeriesConfig.VoucherType.PURCHASE, Purchase, "PUR-"
+            )
         if not self.purchase_type_id:
             default_type = _guess_purchase_type(self.account_id)
             if default_type:
                 self.purchase_type = default_type
         super().save(*args, **kwargs)
+        if is_new and self.invoice_no:
+            _sync_manual_voucher_no(VoucherSeriesConfig.VoucherType.PURCHASE, self.invoice_no)
 
     def totals(self):
         tax_inclusive = bool(self.purchase_type_id and self.purchase_type.tax_inclusive)
@@ -1233,9 +1433,139 @@ class PurchaseBillSundry(models.Model):
 # =========================================================
 
 def _next_voucher_no(model, prefix):
+    """Legacy fallback (used when no VoucherSeriesConfig exists for this type).
+    Kept intact so existing data never breaks.
+    """
     last = model.objects.order_by("-id").values_list("id", flat=True).first()
     n = (last or 0) + 1
     return f"{prefix}{n:04d}"
+
+
+# --- series-aware helper used by all voucher save() methods ----------------
+
+_VOUCHER_TYPE_MAP = {
+    # (app_label, model_name) → VoucherSeriesConfig.VoucherType value
+}
+
+
+def _next_voucher_no_for_type(voucher_type_key, legacy_model, legacy_prefix):
+    """Return the next formatted voucher number for a given voucher type.
+
+    Looks up the VoucherSeriesConfig row for *voucher_type_key*.  If none
+    exists (fresh install, not yet configured) it falls back to the old
+    _next_voucher_no() behaviour so nothing breaks.
+
+    After saving a *manual* number the model's save() should call
+    _sync_manual_voucher_no() so the counter stays ahead of that number.
+    """
+    try:
+        cfg = VoucherSeriesConfig.objects.get(voucher_type=voucher_type_key)
+    except VoucherSeriesConfig.DoesNotExist:
+        return _next_voucher_no(legacy_model, legacy_prefix)
+    if not cfg.is_auto:
+        return ""  # user wants to type it manually every time
+    return cfg.next_number_str()
+
+
+def get_next_voucher_no_preview(voucher_type_key):
+    """Return the next numeric voucher number without incrementing current_number.
+    Returns empty string if auto-numbering is disabled or not configured."""
+    try:
+        cfg = VoucherSeriesConfig.objects.get(voucher_type=voucher_type_key)
+    except VoucherSeriesConfig.DoesNotExist:
+        return ""
+    if not cfg.is_auto:
+        return ""
+    next_n = cfg.starting_number if cfg.current_number == 0 else cfg.current_number + 1
+    return cfg._stored_number(next_n)
+
+
+@lru_cache(maxsize=32)
+def _cached_series_config(voucher_type_key):
+    try:
+        return VoucherSeriesConfig.objects.get(voucher_type=voucher_type_key)
+    except VoucherSeriesConfig.DoesNotExist:
+        return None
+
+
+_MODEL_VOUCHER_TYPE = {
+    "sale": VoucherSeriesConfig.VoucherType.SALE,
+    "purchase": VoucherSeriesConfig.VoucherType.PURCHASE,
+    "salereturn": VoucherSeriesConfig.VoucherType.SALE_RETURN,
+    "purchasereturn": VoucherSeriesConfig.VoucherType.PURCHASE_RETURN,
+    "payment": VoucherSeriesConfig.VoucherType.PAYMENT,
+    "receipt": VoucherSeriesConfig.VoucherType.RECEIPT,
+    "journal": VoucherSeriesConfig.VoucherType.JOURNAL,
+    "creditnote": VoucherSeriesConfig.VoucherType.CREDIT_NOTE,
+    "debitnote": VoucherSeriesConfig.VoucherType.DEBIT_NOTE,
+}
+
+
+def display_voucher_no(voucher_type_key, number_str):
+    """Apply series prefix/suffix for reports. Stored voucher numbers stay numeric."""
+    if not number_str:
+        return number_str or ""
+    cfg = _cached_series_config(voucher_type_key)
+    if cfg is None:
+        return str(number_str).strip()
+    stripped = str(number_str).strip()
+    prefix = cfg.prefix or ""
+    suffix = cfg.suffix or ""
+    if prefix and stripped.startswith(prefix) and (not suffix or stripped.endswith(suffix)):
+        return stripped
+    n = cfg.parse_number(stripped)
+    if n is not None:
+        return cfg._format_number(n)
+    return stripped
+
+
+def display_voucher_no_for_obj(obj):
+    """Report-formatted number for a voucher model instance."""
+    if obj is None:
+        return ""
+    vt = _MODEL_VOUCHER_TYPE.get(obj._meta.model_name)
+    raw = getattr(obj, "invoice_no", None) or getattr(obj, "voucher_no", None) or ""
+    if not vt:
+        return raw
+    return display_voucher_no(vt, raw)
+
+
+def _normalize_voucher_no(voucher_type_key, number_str):
+    """Store a numeric voucher number (padded). Strip a typed prefix/suffix if present."""
+    if not number_str:
+        return number_str
+    try:
+        cfg = VoucherSeriesConfig.objects.get(voucher_type=voucher_type_key)
+    except VoucherSeriesConfig.DoesNotExist:
+        return str(number_str).strip()
+    stripped = str(number_str).strip()
+    n = cfg.parse_number(stripped)
+    if n is not None:
+        return cfg._stored_number(n)
+    return stripped
+
+
+def _sync_manual_voucher_no(voucher_type_key, number_str):
+    """After a voucher is saved with a manually typed number, advance the
+    series counter so that the next auto-number is always higher.
+    This is called from each voucher model's save() when the user supplied
+    their own number instead of relying on auto-generation.
+    """
+    if not number_str:
+        return
+    try:
+        cfg = VoucherSeriesConfig.objects.get(voucher_type=voucher_type_key)
+    except VoucherSeriesConfig.DoesNotExist:
+        return
+    n = cfg.parse_number(number_str)
+    if n is None:
+        return
+    if n > cfg.current_number:
+        from django.db import transaction
+        with transaction.atomic():
+            VoucherSeriesConfig.objects.filter(
+                pk=cfg.pk, current_number__lt=n
+            ).update(current_number=n)
 
 
 class Payment(models.Model):
@@ -1260,9 +1590,18 @@ class Payment(models.Model):
         return self.voucher_no or f"Payment {self.pk}"
 
     def save(self, *args, **kwargs):
-        if not self.voucher_no:
-            self.voucher_no = _next_voucher_no(Payment, "PMT-")
+        is_new = not self.pk
+        if self.voucher_no:
+            self.voucher_no = _normalize_voucher_no(
+                VoucherSeriesConfig.VoucherType.PAYMENT, self.voucher_no
+            )
+        elif not self.voucher_no:
+            self.voucher_no = _next_voucher_no_for_type(
+                VoucherSeriesConfig.VoucherType.PAYMENT, Payment, "PMT-"
+            )
         super().save(*args, **kwargs)
+        if is_new and self.voucher_no:
+            _sync_manual_voucher_no(VoucherSeriesConfig.VoucherType.PAYMENT, self.voucher_no)
 
     @property
     def total_amount(self):
@@ -1317,9 +1656,18 @@ class Receipt(models.Model):
         return self.voucher_no or f"Receipt {self.pk}"
 
     def save(self, *args, **kwargs):
-        if not self.voucher_no:
-            self.voucher_no = _next_voucher_no(Receipt, "RCT-")
+        is_new = not self.pk
+        if self.voucher_no:
+            self.voucher_no = _normalize_voucher_no(
+                VoucherSeriesConfig.VoucherType.RECEIPT, self.voucher_no
+            )
+        elif not self.voucher_no:
+            self.voucher_no = _next_voucher_no_for_type(
+                VoucherSeriesConfig.VoucherType.RECEIPT, Receipt, "RCT-"
+            )
         super().save(*args, **kwargs)
+        if is_new and self.voucher_no:
+            _sync_manual_voucher_no(VoucherSeriesConfig.VoucherType.RECEIPT, self.voucher_no)
 
     @property
     def total_amount(self):
@@ -1372,9 +1720,18 @@ class Journal(models.Model):
         return self.voucher_no or f"Journal {self.pk}"
 
     def save(self, *args, **kwargs):
-        if not self.voucher_no:
-            self.voucher_no = _next_voucher_no(Journal, "JRN-")
+        is_new = not self.pk
+        if self.voucher_no:
+            self.voucher_no = _normalize_voucher_no(
+                VoucherSeriesConfig.VoucherType.JOURNAL, self.voucher_no
+            )
+        elif not self.voucher_no:
+            self.voucher_no = _next_voucher_no_for_type(
+                VoucherSeriesConfig.VoucherType.JOURNAL, Journal, "JRN-"
+            )
         super().save(*args, **kwargs)
+        if is_new and self.voucher_no:
+            _sync_manual_voucher_no(VoucherSeriesConfig.VoucherType.JOURNAL, self.voucher_no)
 
     def totals(self):
         debit = credit = ZERO
@@ -1477,13 +1834,22 @@ class SaleReturn(models.Model):
         return self.voucher_no or f"Sale Return {self.pk}"
 
     def save(self, *args, **kwargs):
-        if not self.voucher_no:
-            self.voucher_no = _next_voucher_no(SaleReturn, "SR-")
+        is_new = not self.pk
+        if self.voucher_no:
+            self.voucher_no = _normalize_voucher_no(
+                VoucherSeriesConfig.VoucherType.SALE_RETURN, self.voucher_no
+            )
+        elif not self.voucher_no:
+            self.voucher_no = _next_voucher_no_for_type(
+                VoucherSeriesConfig.VoucherType.SALE_RETURN, SaleReturn, "SR-"
+            )
         if not self.sale_type_id:
             default_type = _guess_sale_type(self.account_id)
             if default_type:
                 self.sale_type = default_type
         super().save(*args, **kwargs)
+        if is_new and self.voucher_no:
+            _sync_manual_voucher_no(VoucherSeriesConfig.VoucherType.SALE_RETURN, self.voucher_no)
 
     def totals(self):
         tax_inclusive = bool(self.sale_type_id and self.sale_type.tax_inclusive)
@@ -1597,13 +1963,22 @@ class PurchaseReturn(models.Model):
         return self.voucher_no or f"Purchase Return {self.pk}"
 
     def save(self, *args, **kwargs):
-        if not self.voucher_no:
-            self.voucher_no = _next_voucher_no(PurchaseReturn, "PR-")
+        is_new = not self.pk
+        if self.voucher_no:
+            self.voucher_no = _normalize_voucher_no(
+                VoucherSeriesConfig.VoucherType.PURCHASE_RETURN, self.voucher_no
+            )
+        elif not self.voucher_no:
+            self.voucher_no = _next_voucher_no_for_type(
+                VoucherSeriesConfig.VoucherType.PURCHASE_RETURN, PurchaseReturn, "PR-"
+            )
         if not self.purchase_type_id:
             default_type = _guess_purchase_type(self.account_id)
             if default_type:
                 self.purchase_type = default_type
         super().save(*args, **kwargs)
+        if is_new and self.voucher_no:
+            _sync_manual_voucher_no(VoucherSeriesConfig.VoucherType.PURCHASE_RETURN, self.voucher_no)
 
     def totals(self):
         tax_inclusive = bool(self.purchase_type_id and self.purchase_type.tax_inclusive)
@@ -1711,9 +2086,18 @@ class CreditNote(models.Model):
         return self.voucher_no or f"Credit Note {self.pk}"
 
     def save(self, *args, **kwargs):
-        if not self.voucher_no:
-            self.voucher_no = _next_voucher_no(CreditNote, "CN-")
+        is_new = not self.pk
+        if self.voucher_no:
+            self.voucher_no = _normalize_voucher_no(
+                VoucherSeriesConfig.VoucherType.CREDIT_NOTE, self.voucher_no
+            )
+        elif not self.voucher_no:
+            self.voucher_no = _next_voucher_no_for_type(
+                VoucherSeriesConfig.VoucherType.CREDIT_NOTE, CreditNote, "CN-"
+            )
         super().save(*args, **kwargs)
+        if is_new and self.voucher_no:
+            _sync_manual_voucher_no(VoucherSeriesConfig.VoucherType.CREDIT_NOTE, self.voucher_no)
 
     @property
     def total_amount(self):
@@ -1783,9 +2167,18 @@ class DebitNote(models.Model):
         return self.voucher_no or f"Debit Note {self.pk}"
 
     def save(self, *args, **kwargs):
-        if not self.voucher_no:
-            self.voucher_no = _next_voucher_no(DebitNote, "DN-")
+        is_new = not self.pk
+        if self.voucher_no:
+            self.voucher_no = _normalize_voucher_no(
+                VoucherSeriesConfig.VoucherType.DEBIT_NOTE, self.voucher_no
+            )
+        elif not self.voucher_no:
+            self.voucher_no = _next_voucher_no_for_type(
+                VoucherSeriesConfig.VoucherType.DEBIT_NOTE, DebitNote, "DN-"
+            )
         super().save(*args, **kwargs)
+        if is_new and self.voucher_no:
+            _sync_manual_voucher_no(VoucherSeriesConfig.VoucherType.DEBIT_NOTE, self.voucher_no)
 
     @property
     def total_amount(self):
@@ -2180,6 +2573,35 @@ def seed_erp_defaults():
             obj.save(update_fields=["posting_account_sale", "posting_account_purchase"])
 
     _retire_legacy_accounts(accounts)
+    _seed_voucher_series_defaults()
+
+
+def _seed_voucher_series_defaults():
+    defaults = [
+        (VoucherSeriesConfig.VoucherType.SALE, "INV-", "", 4, 1),
+        (VoucherSeriesConfig.VoucherType.PURCHASE, "PUR-", "", 4, 1),
+        (VoucherSeriesConfig.VoucherType.SALE_RETURN, "SR-", "", 4, 1),
+        (VoucherSeriesConfig.VoucherType.PURCHASE_RETURN, "PR-", "", 4, 1),
+        (VoucherSeriesConfig.VoucherType.PAYMENT, "PMT-", "", 4, 1),
+        (VoucherSeriesConfig.VoucherType.RECEIPT, "RCT-", "", 4, 1),
+        (VoucherSeriesConfig.VoucherType.JOURNAL, "JRN-", "", 4, 1),
+        (VoucherSeriesConfig.VoucherType.CREDIT_NOTE, "CN-", "", 4, 1),
+        (VoucherSeriesConfig.VoucherType.DEBIT_NOTE, "DN-", "", 4, 1),
+    ]
+    for vt, prefix, suffix, width, start in defaults:
+        cfg, created = VoucherSeriesConfig.objects.get_or_create(
+            voucher_type=vt,
+            defaults={
+                "prefix": prefix,
+                "suffix": suffix,
+                "number_width": width,
+                "starting_number": start,
+                "current_number": 0,
+                "is_auto": True,
+            },
+        )
+        if created:
+            cfg.sync_counter_from_existing()
 
 
 def _repoint_account(old, new):
