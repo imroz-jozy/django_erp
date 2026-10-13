@@ -1,0 +1,27 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<div style="max-width:820px">
+  <p style="color:#b91c1c;font-weight:600">
+    This rewrites the voucher numbers of existing vouchers (in date order, then entry order)
+    using the starting number, width, prefix and suffix of each series. Take a backup first.
+  </p>
+  {% for cfg, res in previews %}
+  <div style="border:1px solid var(--border-color,#ddd);border-radius:8px;padding:12px 16px;margin:12px 0">
+    <h3 style="margin:0 0 6px">{{ cfg.get_voucher_type_display }}</h3>
+    <div>{{ res.changed }} of {{ res.total }} vouchers will change. Counter will become <strong>{{ res.last_number }}</strong>.</div>
+    {% if res.samples %}
+    <table style="margin-top:8px"><thead><tr><th>Now</th><th>Becomes</th></tr></thead><tbody>
+      {% for old, new in res.samples %}<tr><td>{{ old|default:"(blank)" }}</td><td><strong>{{ new }}</strong></td></tr>{% endfor %}
+    </tbody></table>
+    {% endif %}
+  </div>
+  {% endfor %}
+  <form method="post">{% csrf_token %}
+    {% for obj in queryset %}<input type="hidden" name="{{ action_checkbox_name }}" value="{{ obj.pk }}">{% endfor %}
+    <input type="hidden" name="action" value="renumber_vouchers_action">
+    <input type="hidden" name="confirm_renumber" value="1">
+    <input type="submit" class="default" value="Yes, renumber">
+    <a href="{% url 'admin:masters_voucherseriesconfig_changelist' %}" class="button cancel-link">Cancel</a>
+  </form>
+</div>
+{% endblock %}

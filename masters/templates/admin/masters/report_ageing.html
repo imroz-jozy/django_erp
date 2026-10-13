@@ -1,0 +1,65 @@
+{% extends "admin/masters/report_base.html" %}
+
+{% block report_title %}Ageing {% if side == "R" %}Receivable{% else %}Payable{% endif %}{% endblock %}
+{% block report_subtitle_extra %} | As on <strong>{{ as_on|date:"d M Y" }}</strong> (uses the "To Date"){% endblock %}
+
+{% block report_filters %}
+  <div class="erp-field-item" style="min-width: 260px;">
+    <label>Party</label>
+    <select name="account" class="erp-combobox" data-placeholder="All Parties">
+      <option value="">{% if side == "R" %}All Customers{% else %}All Suppliers{% endif %}</option>
+      {% for p in party_choices %}
+      <option value="{{ p.id }}" data-sub="{{ p.account_group.name }}"{% if selected_account_id == p.id %} selected{% endif %}>{{ p.account_name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+{% endblock %}
+
+{% block report_summary %}
+<div class="erp-kpi-grid">
+  {% if side == "R" %}
+  <div class="erp-kpi-card tone-success">
+    <div class="erp-kpi-label">Amount Receivable</div>
+    <div class="erp-kpi-val">&#8377; {{ total_receivable }}</div>
+    <div class="erp-kpi-sub">{{ receivable_rows|length }} customers owe you</div>
+  </div>
+  <div class="erp-kpi-card tone-warning">
+    <div class="erp-kpi-label">Customer Advances (not netted)</div>
+    <div class="erp-kpi-val">&#8377; {{ total_receivable_advance }}</div>
+  </div>
+  {% else %}
+  <div class="erp-kpi-card tone-danger">
+    <div class="erp-kpi-label">Amount Payable</div>
+    <div class="erp-kpi-val">&#8377; {{ total_payable }}</div>
+    <div class="erp-kpi-sub">{{ payable_rows|length }} suppliers to be paid</div>
+  </div>
+  <div class="erp-kpi-card tone-warning">
+    <div class="erp-kpi-label">Supplier Advances (not netted)</div>
+    <div class="erp-kpi-val">&#8377; {{ total_payable_advance }}</div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block report_body %}
+{% if side == "R" %}{% include "admin/masters/_ageing_table.html" with rows=receivable_rows totals=receivable_bucket_totals grand=total_receivable who="Customer" amt_label="Total Receivable" colour="#047857" %}
+{% else %}{% include "admin/masters/_ageing_table.html" with rows=payable_rows totals=payable_bucket_totals grand=total_payable who="Supplier" amt_label="Total Payable" colour="#b91c1c" %}{% endif %}
+
+<h3 style="margin-top:24px;">Advances / Opposite Balances</h3>
+<div class="erp-report-scroll">
+  <table class="erp-report">
+    <thead><tr><th>Party</th><th>Balance</th><th class="num">Amount (&#8377;)</th></tr></thead>
+    <tbody>
+      {% if side == "R" %}{% for row in receivable_advance_rows %}
+      <tr><td><a href="{% url 'admin:erp_ledger' row.account.id %}?to={{ as_on|date:'Y-m-d' }}"><strong>{{ row.party_name }}</strong></a></td><td>{{ row.dr_cr }}</td><td class="num">&#8377; {{ row.amount }}</td></tr>
+      {% empty %}<tr class="erp-no-filter"><td colspan="3" style="text-align:center;padding:16px;color:#94a3b8;">None.</td></tr>{% endfor %}
+      {% else %}{% for row in payable_advance_rows %}
+      <tr><td><a href="{% url 'admin:erp_ledger' row.account.id %}?to={{ as_on|date:'Y-m-d' }}"><strong>{{ row.party_name }}</strong></a></td><td>{{ row.dr_cr }}</td><td class="num">&#8377; {{ row.amount }}</td></tr>
+      {% empty %}<tr class="erp-no-filter"><td colspan="3" style="text-align:center;padding:16px;color:#94a3b8;">None.</td></tr>{% endfor %}{% endif %}
+    </tbody>
+  </table>
+</div>
+<p style="font-size:0.8rem; color:#64748b; margin-top:8px;">
+  Ageing is calculated first-in-first-out (receipts/payments settle the oldest invoices first), because bills are not allocated individually. Opening balances are shown under "Over 90 days".
+</p>
+{% endblock %}

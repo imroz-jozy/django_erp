@@ -299,6 +299,15 @@ class VoucherSeriesConfig(models.Model):
             "The NEXT auto-generated voucher will be current_number + 1 (or Starting Number if 0)."
         ),
     )
+    store_prefix_suffix = models.BooleanField(
+        default=False,
+        verbose_name="Store prefix/suffix in voucher number",
+        help_text=(
+            "OFF: voucher screens hold only the number (0001); prefix/suffix show on reports. "
+            "ON: the prefix/suffix you set above is saved as part of the voucher number itself "
+            "(e.g. INV-0001/26) on screens, prints and reports."
+        ),
+    )
     is_auto = models.BooleanField(
         default=True,
         verbose_name="Auto-number new vouchers",
@@ -325,6 +334,13 @@ class VoucherSeriesConfig(models.Model):
         """Numeric value stored on the voucher (zero-padded, no prefix/suffix)."""
         w = max(0, self.number_width or 0)
         return str(n).zfill(w) if w else str(n)
+
+    def _voucher_value(self, n):
+        """Value actually saved on the voucher: numeric only, or with
+        prefix/suffix when 'store_prefix_suffix' is ticked."""
+        if self.store_prefix_suffix:
+            return self._format_number(n)
+        return self._stored_number(n)
 
     def _format_number(self, n):
         """Report display: prefix + padded number + suffix."""
@@ -367,17 +383,61 @@ class VoucherSeriesConfig(models.Model):
             cfg.current_number = next_n
             cfg.save(update_fields=["current_number"])
             self.current_number = next_n
-        return self._stored_number(next_n)
+        return self._voucher_value(next_n)
 
     def sync_counter_from_existing(self):
-        """Scan existing voucher numbers for this type and advance
-        current_number past the highest numeric value found.
-        Call this after manually entering vouchers so auto-numbers
-        never collide."""
+        """Move current_number to the highest number found in existing vouchers
+        (up OR down) so the next auto-number follows the real last voucher.
+        Returns (old_counter, new_counter, highest_found)."""
         highest = self._scan_highest_number()
-        if highest is not None and highest > self.current_number:
-            self.current_number = highest
+        old = self.current_number
+        new = highest if highest is not None else 0
+        if new != old:
+            self.current_number = new
             self.save(update_fields=["current_number"])
+        return old, new, highest
+
+    def _model_and_field(self):
+        from django.apps import apps
+        names = {
+            "SALE": ("sale", "invoice_no"), "PURCHASE": ("purchase", "invoice_no"),
+            "SALE_RETURN": ("salereturn", "voucher_no"),
+            "PURCHASE_RETURN": ("purchasereturn", "voucher_no"),
+            "PAYMENT": ("payment", "voucher_no"), "RECEIPT": ("receipt", "voucher_no"),
+            "JOURNAL": ("journal", "voucher_no"), "CREDIT_NOTE": ("creditnote", "voucher_no"),
+            "DEBIT_NOTE": ("debitnote", "voucher_no"),
+        }
+        name, field = names[self.voucher_type]
+        return apps.get_model("masters", name), field
+
+    def renumber_existing(self, dry_run=False):
+        """Rewrite every existing voucher number of this type in date order
+        (then id) as starting_number, +1, +2 ... using the current width and
+        prefix/suffix settings, then set current_number to the last one.
+        Returns a dict of stats + a few sample changes."""
+        from django.db import transaction
+        model, field = self._model_and_field()
+        rows = list(model.objects.order_by("date", "pk").values_list("pk", field))
+        n = self.starting_number or 1
+        changes = []
+        for pk, old in rows:
+            new = self._voucher_value(n)
+            if (old or "") != new:
+                changes.append((pk, old, new))
+            n += 1
+        last = (self.starting_number or 1) + len(rows) - 1 if rows else 0
+        if not dry_run:
+            with transaction.atomic():
+                for pk, _old, new in changes:
+                    model.objects.filter(pk=pk).update(**{field: new})
+                self.current_number = last
+                self.save(update_fields=["current_number"])
+        return {
+            "total": len(rows),
+            "changed": len(changes),
+            "last_number": last,
+            "samples": [(o, nw) for _pk, o, nw in changes[:8]],
+        }
 
     def _scan_highest_number(self):
         """Return the highest *integer* embedded in existing voucher numbers
@@ -1477,7 +1537,7 @@ def get_next_voucher_no_preview(voucher_type_key):
     if not cfg.is_auto:
         return ""
     next_n = cfg.starting_number if cfg.current_number == 0 else cfg.current_number + 1
-    return cfg._stored_number(next_n)
+    return cfg._voucher_value(next_n)
 
 
 @lru_cache(maxsize=32)
@@ -1541,7 +1601,7 @@ def _normalize_voucher_no(voucher_type_key, number_str):
     stripped = str(number_str).strip()
     n = cfg.parse_number(stripped)
     if n is not None:
-        return cfg._stored_number(n)
+        return cfg._voucher_value(n)
     return stripped
 
 

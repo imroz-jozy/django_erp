@@ -198,6 +198,34 @@
   </div>
 
   <div class="erp-nav-group">
+    <button class="erp-nav-heading" type="button" aria-expanded="true">Outstanding</button>
+    <a class="erp-nav-link{% if '/reports/amount-receivable/' in request.path %} is-active{% endif %}" href="{% url 'admin:erp_amount_receivable' %}">
+      <svg class="erp-nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="9" cy="9" r="7"/><path d="M9 4.5v9M6.5 7.5h4a1.5 1.5 0 0 1 0 3h-3a1.5 1.5 0 0 0 0 3h4"/></svg>
+      <span>Amount Receivable</span>
+    </a>
+    <a class="erp-nav-link{% if '/reports/amount-payable/' in request.path %} is-active{% endif %}" href="{% url 'admin:erp_amount_payable' %}">
+      <svg class="erp-nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="9" cy="9" r="7"/><path d="M9 4.5v9M6.5 7.5h4a1.5 1.5 0 0 1 0 3h-3a1.5 1.5 0 0 0 0 3h4"/></svg>
+      <span>Amount Payable</span>
+    </a>
+    <a class="erp-nav-link{% if '/reports/bills-receivable/' in request.path %} is-active{% endif %}" href="{% url 'admin:erp_bills_receivable' %}">
+      <svg class="erp-nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="9" cy="9" r="7"/><path d="M9 4.5v9M6.5 7.5h4a1.5 1.5 0 0 1 0 3h-3a1.5 1.5 0 0 0 0 3h4"/></svg>
+      <span>Bills Receivable</span>
+    </a>
+    <a class="erp-nav-link{% if '/reports/bills-payable/' in request.path %} is-active{% endif %}" href="{% url 'admin:erp_bills_payable' %}">
+      <svg class="erp-nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="9" cy="9" r="7"/><path d="M9 4.5v9M6.5 7.5h4a1.5 1.5 0 0 1 0 3h-3a1.5 1.5 0 0 0 0 3h4"/></svg>
+      <span>Bills Payable</span>
+    </a>
+    <a class="erp-nav-link{% if '/reports/ageing-receivable/' in request.path %} is-active{% endif %}" href="{% url 'admin:erp_ageing_receivable' %}">
+      <svg class="erp-nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="9" cy="9" r="7"/><path d="M9 4.5v9M6.5 7.5h4a1.5 1.5 0 0 1 0 3h-3a1.5 1.5 0 0 0 0 3h4"/></svg>
+      <span>Ageing Receivable</span>
+    </a>
+    <a class="erp-nav-link{% if '/reports/ageing-payable/' in request.path %} is-active{% endif %}" href="{% url 'admin:erp_ageing_payable' %}">
+      <svg class="erp-nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="9" cy="9" r="7"/><path d="M9 4.5v9M6.5 7.5h4a1.5 1.5 0 0 1 0 3h-3a1.5 1.5 0 0 0 0 3h4"/></svg>
+      <span>Ageing Payable</span>
+    </a>
+  </div>
+
+  <div class="erp-nav-group">
     <button class="erp-nav-heading" type="button" aria-expanded="true">Analysis &amp; Trends</button>
     <a class="erp-nav-link{% if '/reports/sale-analysis/' in request.path %} is-active{% endif %}" href="{% url 'admin:erp_sale_analysis' %}">
       <svg class="erp-nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6"><polyline points="2,13 6.5,7.5 10,10.5 16,3.5"/><polyline points="11.5,3.5 16,3.5 16,8"/></svg>
@@ -206,10 +234,6 @@
     <a class="erp-nav-link{% if '/reports/purchase-analysis/' in request.path %} is-active{% endif %}" href="{% url 'admin:erp_purchase_analysis' %}">
       <svg class="erp-nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6"><line x1="3" y1="15.5" x2="3" y2="6"/><line x1="9" y1="15.5" x2="9" y2="2.5"/><line x1="15" y1="15.5" x2="15" y2="9.5"/><line x1="1.5" y1="15.5" x2="16.5" y2="15.5"/></svg>
       <span>Purchase Analysis</span>
-    </a>
-    <a class="erp-nav-link{% if '/reports/outstanding/' in request.path %} is-active{% endif %}" href="{% url 'admin:erp_outstanding' %}">
-      <svg class="erp-nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="9" cy="9" r="7"/><path d="M9 4.5v9M6.5 7.5h4a1.5 1.5 0 0 1 0 3h-3a1.5 1.5 0 0 0 0 3h4"/></svg>
-      <span>Outstanding (Rec./Pay.)</span>
     </a>
     <a class="erp-nav-link" href="{% url 'admin:erp_reports_hub' %}">
       <svg class="erp-nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1.5" y="1.5" width="6.5" height="6.5" rx="1.2"/><rect x="10" y="1.5" width="6.5" height="6.5" rx="1.2"/><rect x="1.5" y="10" width="6.5" height="6.5" rx="1.2"/><rect x="10" y="10" width="6.5" height="6.5" rx="1.2"/></svg>
@@ -242,6 +266,14 @@
     <a class="erp-nav-link{% if '/reports/gst-outward-summary/' in request.path %} is-active{% endif %}" href="{% url 'admin:erp_gst_outward_summary' %}">
       <svg class="erp-nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="2" width="14" height="14" rx="1.2"/><line x1="5" y1="6" x2="13" y2="6"/><line x1="5" y1="9" x2="13" y2="9"/><line x1="5" y1="12" x2="10" y2="12"/></svg>
       <span>GST Outward Summary</span>
+    </a>
+  </div>
+
+  <div class="erp-nav-group">
+    <button class="erp-nav-heading" type="button" aria-expanded="true">Miscellaneous Reports</button>
+    <a class="erp-nav-link{% if '/reports/missing-vouchers/' in request.path %} is-active{% endif %}" href="{% url 'admin:erp_missing_vouchers' %}">
+      <svg class="erp-nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="5.5"/><line x1="12" y1="12" x2="16" y2="16"/></svg>
+      <span>Missing Voucher Numbers</span>
     </a>
   </div>
 

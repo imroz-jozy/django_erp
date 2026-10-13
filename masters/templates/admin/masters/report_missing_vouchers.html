@@ -220,6 +220,19 @@
 {% endblock %}
 
 {% block report_summary %}
+{% if show_picker %}
+<div class="clean-state-box" style="border-color:#93c5fd;">
+  <div class="clean-state-icon">🔍</div>
+  <h3 style="color:#1e3a8a;">Which voucher do you want to check?</h3>
+  <p style="margin-bottom:18px;">Pick one voucher type (loads fast), or choose All to scan everything.</p>
+  <div style="display:flex; flex-wrap:wrap; gap:10px; justify-content:center;">
+    {% for val, label in picker_choices %}
+    <a class="btn-create-voucher" href="?vtype={{ val }}">{{ label }}</a>
+    {% endfor %}
+    <a class="btn-manage-series" href="?vtype=ALL">All Voucher Types</a>
+  </div>
+</div>
+{% else %}
 <!-- KPI METRICS -->
 <div class="erp-kpi-grid">
   <div class="erp-kpi-card">
@@ -272,10 +285,11 @@
   </div>
   {% endfor %}
 </div>
+{% endif %}
 {% endblock %}
 
 {% block report_body %}
-{% if missing_items %}
+{% if show_picker %}{% elif missing_items %}
 <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
   <h2 style="font-size: 1.15rem; font-weight: 700; margin: 0; color: var(--header-color, #1e293b);">
     Detected Missing Voucher Numbers ({{ missing_items|length }})

@@ -610,11 +610,31 @@ class OutstandingReportTestCase(TestCase):
         self.assertEqual(data["net_position"], Decimal("300.00"))
         self.assertEqual(sum(data["receivable_rows"][0]["buckets"]), Decimal("700.00"))
 
-    def test_outstanding_view(self):
-        response = self.client.get(reverse("admin:erp_outstanding"), {"from": "2026-04-01", "to": "2026-05-31"})
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "OS Customer")
-        self.assertContains(response, "OS Supplier")
+    def test_outstanding_views(self):
+        q = {"from": "2026-04-01", "to": "2026-05-31"}
+        for name, yes, no in [
+            ("erp_ageing_receivable", "OS Customer", "OS Supplier"),
+            ("erp_ageing_payable", "OS Supplier", "OS Customer"),
+            ("erp_amount_receivable", "OS Customer", "OS Supplier"),
+            ("erp_amount_payable", "OS Supplier", "OS Customer"),
+            ("erp_bills_receivable", "OS Customer", "OS Supplier"),
+            ("erp_bills_payable", "OS Supplier", "OS Customer"),
+        ]:
+            response = self.client.get(reverse("admin:" + name), q)
+            self.assertEqual(response.status_code, 200, name)
+            self.assertContains(response, yes)
+            self.assertNotContains(response, no)
+
+    def test_bills_totals_match_amounts(self):
+        from masters.reports import bills_outstanding_report
+        r = bills_outstanding_report(date(2026, 5, 31), "R")
+        p = bills_outstanding_report(date(2026, 5, 31), "P")
+        self.assertEqual(r["total_pending"], Decimal("700.00"))
+        self.assertEqual(p["total_pending"], Decimal("400.00"))
+
+    def test_old_outstanding_url_redirects(self):
+        response = self.client.get(reverse("admin:erp_outstanding"))
+        self.assertEqual(response.status_code, 302)
 
 
 class VoucherSeriesAndMissingReportTestCase(TestCase):
@@ -698,9 +718,32 @@ class VoucherSeriesAndMissingReportTestCase(TestCase):
         Payment.objects.create(date=date(2026, 5, 1), through=self.cash, voucher_no="PMT-0001")
         Payment.objects.create(date=date(2026, 5, 3), through=self.cash, voucher_no="PMT-0003")
 
-        response = self.client.get(reverse("admin:erp_missing_vouchers"))
+        # No selection yet: only the picker is shown, nothing is scanned.
+        picker = self.client.get(reverse("admin:erp_missing_vouchers"))
+        self.assertEqual(picker.status_code, 200)
+        self.assertContains(picker, "Which voucher do you want to check?")
+        self.assertNotContains(picker, "PMT-0002")
+
+        response = self.client.get(reverse("admin:erp_missing_vouchers") + "?vtype=PAYMENT")
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "PMT-0002")
         self.assertContains(response, "Missing Voucher Numbers Report")
         self.assertContains(response, "+ Create Voucher")
 
+    def test_renumber_existing_vouchers(self):
+        from masters.models import Payment, VoucherSeriesConfig
+        cfg, _ = VoucherSeriesConfig.objects.get_or_create(
+            voucher_type=VoucherSeriesConfig.VoucherType.PAYMENT,
+            defaults={"number_width": 4, "starting_number": 1, "is_auto": True},
+        )
+        cfg.prefix, cfg.suffix, cfg.number_width = "P/", "/26", 3
+        cfg.starting_number, cfg.store_prefix_suffix = 1, True
+        cfg.save()
+        Payment.objects.all().delete()
+        a = Payment.objects.create(date=date(2026, 5, 1), through=self.cash, voucher_no="5")
+        b = Payment.objects.create(date=date(2026, 5, 9), through=self.cash, voucher_no="9")
+        res = cfg.renumber_existing()
+        a.refresh_from_db(); b.refresh_from_db(); cfg.refresh_from_db()
+        self.assertEqual((a.voucher_no, b.voucher_no), ("P/001/26", "P/002/26"))
+        self.assertEqual(cfg.current_number, 2)
+        self.assertEqual(res["changed"], 2)

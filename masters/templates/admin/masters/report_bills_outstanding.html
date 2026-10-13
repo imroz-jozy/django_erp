@@ -1,0 +1,53 @@
+{% extends "admin/masters/report_base.html" %}
+
+{% block report_title %}Bills {% if side == "R" %}Receivable{% else %}Payable{% endif %}{% endblock %}
+{% block report_subtitle_extra %} | Unsettled bills as on <strong>{{ as_on|date:"d M Y" }}</strong> (uses the "To Date"){% endblock %}
+
+{% block report_filters %}
+  <div class="erp-field-item" style="min-width: 260px;">
+    <label>Party</label>
+    <select name="account" class="erp-combobox" data-placeholder="All Parties">
+      <option value="">{% if side == "R" %}All Customers{% else %}All Suppliers{% endif %}</option>
+      {% for p in party_choices %}
+      <option value="{{ p.id }}" data-sub="{{ p.account_group.name }}"{% if selected_account_id == p.id %} selected{% endif %}>{{ p.account_name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+{% endblock %}
+
+{% block report_summary %}
+<div class="erp-kpi-grid">
+  <div class="erp-kpi-card {% if side == "R" %}tone-success{% else %}tone-danger{% endif %}">
+    <div class="erp-kpi-label">Bills {% if side == "R" %}Receivable{% else %}Payable{% endif %}</div>
+    <div class="erp-kpi-val">&#8377; {{ total_pending }}</div>
+    <div class="erp-kpi-sub">{{ bills|length }} open bills &middot; {{ party_count }} parties</div>
+  </div>
+</div>
+{% endblock %}
+
+{% block report_body %}
+<div class="erp-report-scroll">
+  <table class="erp-report">
+    <thead><tr><th style="min-width:220px;">{% if side == "R" %}Customer{% else %}Supplier{% endif %}</th><th>Bill Date</th><th>Type</th><th>Bill No</th><th class="num">Bill Amount (&#8377;)</th><th class="num">Pending (&#8377;)</th><th class="num">Days</th></tr></thead>
+    <tbody>
+      {% for b in bills %}
+      <tr>
+        <td><strong>{{ b.party_name }}</strong></td>
+        <td>{% if b.date %}{{ b.date|date:"d M Y" }}{% else %}-{% endif %}</td>
+        <td>{{ b.vtype }}</td>
+        <td>{% if b.url %}<a href="{{ b.url }}">{{ b.voucher_no }}</a>{% else %}{{ b.voucher_no }}{% endif %}</td>
+        <td class="num">{{ b.bill_amount }}</td>
+        <td class="num" style="font-weight:700;">&#8377; {{ b.pending }}</td>
+        <td class="num">{% if b.days != None %}{{ b.days }}{% else %}-{% endif %}</td>
+      </tr>
+      {% empty %}
+      <tr class="erp-no-filter"><td colspan="7" style="text-align:center;padding:24px;color:#94a3b8;">No open bills.</td></tr>
+      {% endfor %}
+      <tr class="total"><td colspan="5">Total</td><td class="num">&#8377; {{ total_pending }}</td><td></td></tr>
+    </tbody>
+  </table>
+</div>
+<p style="font-size:0.8rem; color:#64748b; margin-top:8px;">
+  Receipts/payments are matched to the oldest bills first (bills are not allocated individually).
+</p>
+{% endblock %}

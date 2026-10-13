@@ -1,0 +1,32 @@
+<div class="erp-report-scroll">
+  <table class="erp-report">
+    <thead>
+      <tr>
+        <th style="min-width:220px;">{{ who }}</th>
+        <th>Mobile</th>
+        {% for l in bucket_labels %}<th class="num">{{ l }} (&#8377;)</th>{% endfor %}
+        <th class="num">Oldest (days)</th>
+        <th class="num">{{ amt_label }} (&#8377;)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td><a href="{% url 'admin:erp_ledger' row.account.id %}?to={{ as_on|date:'Y-m-d' }}"><strong>{{ row.party_name }}</strong></a></td>
+        <td>{{ row.mobile }}</td>
+        {% for b in row.buckets %}<td class="num">{{ b }}</td>{% endfor %}
+        <td class="num">{% if row.oldest_days != None %}{{ row.oldest_days }}{% else %}-{% endif %}</td>
+        <td class="num" style="font-weight:700; color:{{ colour }};">&#8377; {{ row.amount }}</td>
+      </tr>
+      {% empty %}
+      <tr class="erp-no-filter"><td colspan="8" style="text-align:center; padding:24px; color:#94a3b8;">No balances.</td></tr>
+      {% endfor %}
+      <tr class="total">
+        <td colspan="2">Total ({{ rows|length }})</td>
+        {% for b in totals %}<td class="num">{{ b }}</td>{% endfor %}
+        <td></td>
+        <td class="num">&#8377; {{ grand }}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>

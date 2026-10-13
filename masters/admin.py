@@ -1,6 +1,7 @@
 from datetime import date
 
 from django.contrib import admin, messages
+from django.contrib.admin import helpers
 from django.core.exceptions import PermissionDenied, ValidationError
 from django import forms
 from django.forms.models import BaseInlineFormSet
@@ -104,6 +105,7 @@ from .reports import (
     sales_analysis,
     purchase_analysis,
     outstanding_report,
+    bills_outstanding_report,
     trial_balance,
     missing_vouchers_report,
 )
@@ -790,20 +792,56 @@ def sale_analysis_view(request):
     )
 
 
-def outstanding_view(request):
-    """Outstanding receivable / payable as on the 'To Date' of the filter."""
+def _outstanding_side_view(request, side, template, title, kind):
     _, as_on = period_from_request(request)
     account_id = request.GET.get("account") or None
-    data = outstanding_report(as_on, account_id=account_id)
+    if kind == "bills":
+        data = bills_outstanding_report(as_on, side, account_id=account_id)
+    else:
+        data = outstanding_report(as_on, account_id=account_id, sides=side if kind == "ageing" else "")
     ctx = {
         **data,
+        "side": side,
         "selected_account_id": int(account_id) if account_id else None,
     }
-    return TemplateResponse(
-        request,
-        "admin/masters/report_outstanding.html",
-        _report_context(request, "Outstanding Receivable & Payable", ctx),
-    )
+    if kind != "bills":
+        # party list for the filter dropdown (this side only)
+        from .reports import _party_side
+        group_map = {g.id: (g.name, g.under_group_id) for g in AccountGroup.objects.all()}
+        ctx["party_choices"] = [
+            acc for acc in Account.objects.select_related("account_group").order_by("account_name")
+            if _party_side(group_map, acc.account_group_id) == side
+        ]
+    return TemplateResponse(request, template, _report_context(request, title, ctx))
+
+
+def outstanding_view(request):
+    """Old combined Outstanding report: now split into Ageing Receivable / Payable."""
+    return redirect("admin:erp_ageing_receivable")
+
+
+def ageing_receivable_view(request):
+    return _outstanding_side_view(request, "R", "admin/masters/report_ageing.html", "Ageing Receivable", "ageing")
+
+
+def ageing_payable_view(request):
+    return _outstanding_side_view(request, "P", "admin/masters/report_ageing.html", "Ageing Payable", "ageing")
+
+
+def amount_receivable_view(request):
+    return _outstanding_side_view(request, "R", "admin/masters/report_amount_outstanding.html", "Amount Receivable", "amount")
+
+
+def amount_payable_view(request):
+    return _outstanding_side_view(request, "P", "admin/masters/report_amount_outstanding.html", "Amount Payable", "amount")
+
+
+def bills_receivable_view(request):
+    return _outstanding_side_view(request, "R", "admin/masters/report_bills_outstanding.html", "Bills Receivable", "bills")
+
+
+def bills_payable_view(request):
+    return _outstanding_side_view(request, "P", "admin/masters/report_bills_outstanding.html", "Bills Payable", "bills")
 
 
 def purchase_analysis_view(request):
@@ -834,8 +872,23 @@ def purchase_analysis_view(request):
 
 
 def missing_vouchers_report_view(request):
-    vtype = request.GET.get("vtype") or None
-    data = missing_vouchers_report(selected_voucher_type=vtype)
+    vtype = request.GET.get("vtype") or ""
+    if not vtype:
+        # Nothing chosen yet: don't scan anything, just ask which voucher to check.
+        data = {
+            "show_picker": True,
+            "selected_voucher_type": "",
+            "type_choices": [("", "-- Select voucher type --"), ("ALL", "All Voucher Types (slow)")]
+            + list(VoucherSeriesConfig.VoucherType.choices),
+            "picker_choices": list(VoucherSeriesConfig.VoucherType.choices),
+        }
+    else:
+        data = missing_vouchers_report(selected_voucher_type=None if vtype == "ALL" else vtype)
+        data["show_picker"] = False
+        data["selected_voucher_type"] = vtype
+        data["type_choices"] = [("", "-- Select voucher type --"), ("ALL", "All Voucher Types (slow)")] + list(
+            VoucherSeriesConfig.VoucherType.choices
+        )
     return TemplateResponse(
         request,
         "admin/masters/report_missing_vouchers.html",
@@ -1568,6 +1621,36 @@ if not getattr(admin.site, "_erp_urls_patched", False):
                 name="erp_purchase_analysis",
             ),
             path(
+                "reports/ageing-receivable/",
+                admin.site.admin_view(ageing_receivable_view),
+                name="erp_ageing_receivable",
+            ),
+            path(
+                "reports/ageing-payable/",
+                admin.site.admin_view(ageing_payable_view),
+                name="erp_ageing_payable",
+            ),
+            path(
+                "reports/amount-receivable/",
+                admin.site.admin_view(amount_receivable_view),
+                name="erp_amount_receivable",
+            ),
+            path(
+                "reports/amount-payable/",
+                admin.site.admin_view(amount_payable_view),
+                name="erp_amount_payable",
+            ),
+            path(
+                "reports/bills-receivable/",
+                admin.site.admin_view(bills_receivable_view),
+                name="erp_bills_receivable",
+            ),
+            path(
+                "reports/bills-payable/",
+                admin.site.admin_view(bills_payable_view),
+                name="erp_bills_payable",
+            ),
+            path(
                 "reports/outstanding/",
                 admin.site.admin_view(outstanding_view),
                 name="erp_outstanding",
@@ -2268,11 +2351,12 @@ class VoucherSeriesConfigAdmin(admin.ModelAdmin):
         (
             "Series Formatting (Prefix & Suffix)",
             {
-                "fields": ("prefix", "suffix", "number_width", "next_number_preview"),
+                "fields": ("prefix", "suffix", "store_prefix_suffix", "number_width", "next_number_preview"),
                 "description": (
-                    "Prefix and suffix appear on reports only (e.g. INV-0001). "
-                    "Voucher screens store a numeric invoice/voucher number (e.g. 0001). "
-                    "Number width is the minimum digits with zero padding."
+                    "Type any prefix/suffix you like (e.g. 'INV/' and '/26-27'). "
+                    "Untick 'Store prefix/suffix' to show them on reports only; tick it to save them "
+                    "inside the voucher number itself. Existing vouchers are updated with the "
+                    "'Renumber existing vouchers' action. Number width is the minimum digits with zero padding."
                 ),
             },
         ),
@@ -2288,14 +2372,14 @@ class VoucherSeriesConfigAdmin(admin.ModelAdmin):
             },
         ),
     )
-    actions = ["sync_counters_action", "reset_counters_action"]
+    actions = ["sync_counters_action", "renumber_vouchers_action", "reset_counters_action"]
 
     @admin.display(description="Next Voucher No")
     def next_number_preview(self, obj):
         if not obj or not obj.pk:
             return "-"
         next_n = obj.starting_number if obj.current_number == 0 else obj.current_number + 1
-        stored = obj._stored_number(next_n)
+        stored = obj._voucher_value(next_n)
         formatted = obj._format_number(next_n)
         return format_html(
             '<span style="font-family:monospace; font-weight:700; color:#2563eb; font-size:1.05rem;">{}</span>'
@@ -2306,11 +2390,36 @@ class VoucherSeriesConfigAdmin(admin.ModelAdmin):
 
     @admin.action(description="🔄 Sync counter from existing database vouchers")
     def sync_counters_action(self, request, queryset):
-        count = 0
         for cfg in queryset:
-            cfg.sync_counter_from_existing()
-            count += 1
-        self.message_user(request, f"Synchronized sequence counter for {count} voucher series from existing database records.")
+            old, new, highest = cfg.sync_counter_from_existing()
+            label = cfg.get_voucher_type_display()
+            if highest is None:
+                self.message_user(request, f"{label}: no vouchers found, counter is {new}.", messages.WARNING)
+            elif old == new:
+                self.message_user(request, f"{label}: counter already correct ({new}). Use 'Renumber existing vouchers' to rewrite old numbers.")
+            else:
+                self.message_user(request, f"{label}: counter changed {old} → {new}. Next voucher = {cfg._voucher_value(new + 1)}.")
+
+    @admin.action(description="🔢 Renumber existing vouchers (date order, with current prefix/suffix/width)")
+    def renumber_vouchers_action(self, request, queryset):
+        if request.POST.get("confirm_renumber"):
+            for cfg in queryset:
+                res = cfg.renumber_existing()
+                self.message_user(
+                    request,
+                    f"{cfg.get_voucher_type_display()}: {res['changed']} of {res['total']} vouchers renumbered. Counter set to {res['last_number']}.",
+                )
+            return None
+        previews = [(cfg, cfg.renumber_existing(dry_run=True)) for cfg in queryset]
+        ctx = {
+            **self.admin_site.each_context(request),
+            "title": "Confirm voucher renumbering",
+            "previews": previews,
+            "queryset": queryset,
+            "action_checkbox_name": helpers.ACTION_CHECKBOX_NAME,
+            "opts": self.model._meta,
+        }
+        return TemplateResponse(request, "admin/masters/voucherseriesconfig/renumber_confirm.html", ctx)
 
     @admin.action(description="⏮️ Reset counter to 0 (restart from Starting Number)")
     def reset_counters_action(self, request, queryset):

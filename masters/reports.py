@@ -2632,7 +2632,7 @@ def _fifo_ageing(account, as_on, sign):
     return [money(b) for b in buckets], oldest
 
 
-def outstanding_report(as_on, account_id=None):
+def outstanding_report(as_on, account_id=None, sides="RP"):
     """Amount receivable (Sundry Debtors) and payable (Sundry Creditors)
     as on ``as_on``, with FIFO ageing.
 
@@ -2667,10 +2667,16 @@ def outstanding_report(as_on, account_id=None):
             "oldest_days": None,
         }
         if side == "R" and bal > 0:
-            item["buckets"], item["oldest_days"] = _fifo_ageing(acc, as_on, 1)
+            if "R" in sides:
+                item["buckets"], item["oldest_days"] = _fifo_ageing(acc, as_on, 1)
+            else:
+                item["buckets"] = [ZERO] * 4
             receivable.append(item)
         elif side == "P" and bal < 0:
-            item["buckets"], item["oldest_days"] = _fifo_ageing(acc, as_on, -1)
+            if "P" in sides:
+                item["buckets"], item["oldest_days"] = _fifo_ageing(acc, as_on, -1)
+            else:
+                item["buckets"] = [ZERO] * 4
             payable.append(item)
         elif side == "R":
             rec_adv.append(item)   # debtor with a credit balance
@@ -2847,8 +2853,9 @@ def missing_vouchers_report(selected_voucher_type=None):
 
             try:
                 base_add_url = reverse(meta["add_url_name"])
-                stored_no = cfg._stored_number(n)
-                add_url = f"{base_add_url}?{meta['param_name']}={stored_no}"
+                stored_no = cfg._voucher_value(n)
+                from urllib.parse import urlencode
+                add_url = f"{base_add_url}?{urlencode({meta['param_name']: stored_no})}"
             except Exception:
                 add_url = "#"
 
@@ -2898,3 +2905,84 @@ def missing_vouchers_report(selected_voucher_type=None):
         "has_gaps": total_missing_count > 0,
     }
 
+
+# =========================================================
+# BILLS RECEIVABLE / PAYABLE (open bill-by-bill list)
+# =========================================================
+
+def _fifo_open_bills(account, as_on, sign):
+    """Like _fifo_ageing, but returns the individual unsettled bills.
+
+    Receipts/payments are matched against the oldest bills first (the ERP has
+    no bill-by-bill allocation). Returns a list of dicts with the bill
+    reference, original amount and the amount still pending.
+    """
+    events = [(None, "Opening Balance", "", money(account.opening_signed()) * sign, None)]
+    for e in _voucher_entries_for_account(account):
+        if e["date"] > as_on:
+            continue
+        events.append((e["date"], e["vtype"], e["voucher_no"], (e["debit"] - e["credit"]) * sign, e.get("voucher_url")))
+    # opening first, then by date (stable, so same-day order is kept)
+    events.sort(key=lambda x: (x[0] is not None, x[0] or date.min))
+
+    open_items = []  # [date, vtype, vno, original, pending, url]
+    pool = ZERO
+    for when, vtype, vno, amt, url in events:
+        if amt > 0:
+            original = amt
+            if pool > 0:
+                used = min(pool, amt)
+                pool -= used
+                amt -= used
+            if amt > 0:
+                open_items.append([when, vtype, vno, original, amt, url])
+        elif amt < 0:
+            need = -amt
+            while need > 0 and open_items:
+                take = min(need, open_items[0][4])
+                open_items[0][4] -= take
+                need -= take
+                if open_items[0][4] <= 0:
+                    open_items.pop(0)
+            pool += need
+    return [
+        {
+            "date": when,
+            "vtype": vtype,
+            "voucher_no": vno,
+            "bill_amount": money(original),
+            "pending": money(pending),
+            "days": (as_on - when).days if when else None,
+            "url": url,
+        }
+        for when, vtype, vno, original, pending, url in open_items
+    ]
+
+
+def bills_outstanding_report(as_on, side, account_id=None):
+    """Open (unsettled) bills of customers (side='R') or suppliers (side='P')."""
+    sign = 1 if side == "R" else -1
+    rows = build_ledgers(_OUTSTANDING_SINCE, as_on)
+    group_map = {g.id: (g.name, g.under_group_id) for g in AccountGroup.objects.all()}
+    bills, party_choices = [], []
+    for row in rows:
+        acc = row["account"]
+        if _party_side(group_map, acc.account_group_id) != side:
+            continue
+        party_choices.append(acc)
+        if account_id and str(acc.id) != str(account_id):
+            continue
+        bal = row["balance"]
+        if bal == 0 or (bal > 0) != (side == "R"):
+            continue
+        for b in _fifo_open_bills(acc, as_on, sign):
+            bills.append({**b, "account": acc, "party_name": acc.account_name})
+    bills.sort(key=lambda b: (b["party_name"].lower(), b["date"] or date.min))
+    return {
+        "as_on": as_on,
+        "side": side,
+        "bills": bills,
+        "total_pending": money(sum((b["pending"] for b in bills), ZERO)),
+        "party_count": len({b["account"].id for b in bills}),
+        "party_choices": party_choices,
+    }

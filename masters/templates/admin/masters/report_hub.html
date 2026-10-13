@@ -500,16 +500,76 @@
         </div>
       </a>
 
-      <a href="{% url 'admin:erp_outstanding' %}" class="erp-report-card">
+      <a href="{% url 'admin:erp_amount_receivable' %}" class="erp-report-card">
         <div class="erp-card-top">
           <div class="erp-card-icon icon-amber">💰</div>
           <div class="erp-card-content">
-            <h3>Outstanding Receivable &amp; Payable</h3>
-            <p>Party-wise amount to receive from customers and to pay to suppliers as on a date, with 30/60/90-day ageing.</p>
+            <h3>Amount Receivable</h3>
+            <p>Simple party-wise amount to receive from customers.</p>
           </div>
         </div>
         <div class="erp-card-footer">
-          <span>Open Outstanding Report &rarr;</span>
+          <span>Open Amount Receivable &rarr;</span>
+        </div>
+      </a>
+      <a href="{% url 'admin:erp_amount_payable' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-amber">💰</div>
+          <div class="erp-card-content">
+            <h3>Amount Payable</h3>
+            <p>Simple party-wise amount to pay to suppliers.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>Open Amount Payable &rarr;</span>
+        </div>
+      </a>
+      <a href="{% url 'admin:erp_bills_receivable' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-amber">💰</div>
+          <div class="erp-card-content">
+            <h3>Bills Receivable</h3>
+            <p>Open customer bills still to be received.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>Open Bills Receivable &rarr;</span>
+        </div>
+      </a>
+      <a href="{% url 'admin:erp_bills_payable' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-amber">💰</div>
+          <div class="erp-card-content">
+            <h3>Bills Payable</h3>
+            <p>Open supplier bills still to be paid.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>Open Bills Payable &rarr;</span>
+        </div>
+      </a>
+      <a href="{% url 'admin:erp_ageing_receivable' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-amber">💰</div>
+          <div class="erp-card-content">
+            <h3>Ageing Receivable</h3>
+            <p>Customer dues with 30/60/90-day ageing.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>Open Ageing Receivable &rarr;</span>
+        </div>
+      </a>
+      <a href="{% url 'admin:erp_ageing_payable' %}" class="erp-report-card">
+        <div class="erp-card-top">
+          <div class="erp-card-icon icon-amber">💰</div>
+          <div class="erp-card-content">
+            <h3>Ageing Payable</h3>
+            <p>Supplier dues with 30/60/90-day ageing.</p>
+          </div>
+        </div>
+        <div class="erp-card-footer">
+          <span>Open Ageing Payable &rarr;</span>
         </div>
       </a>
     </div>
