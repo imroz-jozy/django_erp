@@ -20,7 +20,7 @@
   <div class="erp-kpi-card {% if side == "R" %}tone-success{% else %}tone-danger{% endif %}">
     <div class="erp-kpi-label">Bills {% if side == "R" %}Receivable{% else %}Payable{% endif %}</div>
     <div class="erp-kpi-val">&#8377; {{ total_pending }}</div>
-    <div class="erp-kpi-sub">{{ bills|length }} open bills &middot; {{ party_count }} parties</div>
+    <div class="erp-kpi-sub">{{ bill_count }} open bills &middot; {{ party_count }} parties</div>
   </div>
 </div>
 {% endblock %}
@@ -28,22 +28,33 @@
 {% block report_body %}
 <div class="erp-report-scroll">
   <table class="erp-report">
-    <thead><tr><th style="min-width:220px;">{% if side == "R" %}Customer{% else %}Supplier{% endif %}</th><th>Bill Date</th><th>Type</th><th>Bill No</th><th class="num">Bill Amount (&#8377;)</th><th class="num">Pending (&#8377;)</th><th class="num">Days</th></tr></thead>
+    <thead><tr><th style="min-width:240px;">{% if side == "R" %}Customer{% else %}Supplier{% endif %} / Bill</th><th>Bill Date</th><th>Type</th><th>Bill No</th><th class="num">Bill Amount (&#8377;)</th><th class="num">Pending (&#8377;)</th><th class="num">Days</th></tr></thead>
     <tbody>
-      {% for b in bills %}
+      {% for g in groups %}
+      <tr style="background:rgba(100,116,139,0.12);">
+        <td colspan="7"><a href="{% url 'admin:erp_ledger' g.account.id %}?to={{ as_on|date:'Y-m-d' }}"><strong>{{ g.party_name }}</strong></a>{% if g.mobile %} <span style="color:#64748b;">&middot; {{ g.mobile }}</span>{% endif %}</td>
+      </tr>
+      {% for b in g.bills %}
       <tr>
-        <td><strong>{{ b.party_name }}</strong></td>
+        <td style="padding-left:28px;color:#64748b;">&mdash;</td>
         <td>{% if b.date %}{{ b.date|date:"d M Y" }}{% else %}-{% endif %}</td>
         <td>{{ b.vtype }}</td>
         <td>{% if b.url %}<a href="{{ b.url }}">{{ b.voucher_no }}</a>{% else %}{{ b.voucher_no }}{% endif %}</td>
         <td class="num">{{ b.bill_amount }}</td>
-        <td class="num" style="font-weight:700;">&#8377; {{ b.pending }}</td>
+        <td class="num">{{ b.pending }}</td>
         <td class="num">{% if b.days != None %}{{ b.days }}{% else %}-{% endif %}</td>
+      </tr>
+      {% endfor %}
+      <tr style="font-weight:700;">
+        <td colspan="4" style="text-align:right;">Total of {{ g.party_name }}</td>
+        <td class="num">{{ g.total_bill }}</td>
+        <td class="num">&#8377; {{ g.total_pending }}</td>
+        <td></td>
       </tr>
       {% empty %}
       <tr class="erp-no-filter"><td colspan="7" style="text-align:center;padding:24px;color:#94a3b8;">No open bills.</td></tr>
       {% endfor %}
-      <tr class="total"><td colspan="5">Total</td><td class="num">&#8377; {{ total_pending }}</td><td></td></tr>
+      <tr class="total"><td colspan="5">Grand Total</td><td class="num">&#8377; {{ total_pending }}</td><td></td></tr>
     </tbody>
   </table>
 </div>

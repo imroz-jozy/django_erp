@@ -631,6 +631,25 @@ class OutstandingReportTestCase(TestCase):
         p = bills_outstanding_report(date(2026, 5, 31), "P")
         self.assertEqual(r["total_pending"], Decimal("700.00"))
         self.assertEqual(p["total_pending"], Decimal("400.00"))
+        # grouped party by party: each group carries its own bills and subtotal
+        self.assertEqual(len(r["groups"]), 1)
+        self.assertEqual(r["groups"][0]["party_name"], "OS Customer")
+        self.assertEqual(r["groups"][0]["total_pending"], Decimal("700.00"))
+
+    def test_batch_entries_match_single_account_entries(self):
+        from masters.models import Account
+        from masters.reports import _voucher_entries_by_accounts, _voucher_entries_for_account
+        accounts = list(Account.objects.all())
+        batch = _voucher_entries_by_accounts({a.id for a in accounts})
+        for acc in accounts:
+            self.assertEqual(batch[acc.id], _voucher_entries_for_account(acc), acc.account_name)
+
+    def test_ageing_rows_carry_bills(self):
+        from masters.reports import outstanding_report
+        data = outstanding_report(date(2026, 5, 31))
+        row = data["receivable_rows"][0]
+        self.assertEqual(sum(b["pending"] for b in row["bills"]), row["amount"])
+        self.assertEqual(sum(row["buckets"]), row["amount"])
 
     def test_old_outstanding_url_redirects(self):
         response = self.client.get(reverse("admin:erp_outstanding"))

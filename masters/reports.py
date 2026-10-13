@@ -1461,6 +1461,193 @@ def _voucher_entries_for_account(account):
     return entries
 
 
+def _voucher_entries_by_accounts(account_ids):
+    """Ledger entries for MANY accounts in a single pass over the vouchers.
+
+    Same rules and same entries as _voucher_entries_for_account(), but each
+    voucher is read and totalled once instead of once per account. Returns
+    {account_id: [entries sorted by date]}. Used by the outstanding / ageing /
+    bills reports, which previously re-read every voucher for every party.
+    """
+    wanted = set(account_ids)
+    by = {i: [] for i in wanted}
+
+    def post(acc_id, *args, **kwargs):
+        if acc_id in wanted:
+            _append_entry(by[acc_id], *args, **kwargs)
+
+    sales = Sale.objects.select_related(
+        "account", "sale_type", "sale_type__sales_account",
+        "sale_type__tax_account", "sale_type__tax_account_2",
+    ).prefetch_related(
+        Prefetch("items", queryset=SaleItem.objects.select_related("item", "item__sale_account")),
+        Prefetch(
+            "bill_sundries",
+            queryset=SaleBillSundry.objects.select_related("bill_sundry", "bill_sundry__posting_account_sale"),
+        ),
+    )
+    for sale in sales:
+        totals = sale.totals()
+        sale_ti = bool(sale.sale_type_id and sale.sale_type.tax_inclusive)
+        post(sale.account_id, sale.date, "Sale", sale.invoice_no, sale.narration, totals["net_amount"], 0, voucher=sale)
+        sales_acc = sale.sale_type.sales_account if sale.sale_type_id else None
+        for line in sale.items.all():
+            line_acc = line.item.sale_account if (line.item_id and line.item.sale_account_id) else sales_acc
+            if line_acc and line_acc.id in wanted:
+                line_amt = compute_line_amounts(line, tax_inclusive=sale_ti)
+                post(line_acc.id, sale.date, "Sale", sale.invoice_no, sale.narration, 0, line_amt["amount_after_discount"], voucher=sale)
+        if sale.sale_type_id and totals["tax_amount"]:
+            for tax_acc, tax_amt in sale.sale_type.tax_postings(totals["tax_amount"]):
+                if tax_acc:
+                    post(tax_acc.id, sale.date, "Sale", sale.invoice_no, sale.narration, 0, tax_amt, voucher=sale)
+        for line, signed in zip(sale.bill_sundries.all(), totals["sundry_signed_amounts"]):
+            acc = line.bill_sundry.posting_account_sale or sales_acc
+            if not acc:
+                continue
+            if signed >= 0:
+                post(acc.id, sale.date, "Sale", sale.invoice_no, sale.narration, 0, signed, voucher=sale)
+            else:
+                post(acc.id, sale.date, "Sale", sale.invoice_no, sale.narration, -signed, 0, voucher=sale)
+
+    purchases = Purchase.objects.select_related(
+        "account", "purchase_type", "purchase_type__purchase_account",
+        "purchase_type__tax_account", "purchase_type__tax_account_2",
+        "purchase_type__rcm_payable_account",
+    ).prefetch_related(
+        Prefetch("items", queryset=PurchaseItem.objects.select_related("item", "item__purchase_account")),
+        Prefetch(
+            "bill_sundries",
+            queryset=PurchaseBillSundry.objects.select_related("bill_sundry", "bill_sundry__posting_account_purchase"),
+        ),
+    )
+    for purchase in purchases:
+        totals = purchase.totals()
+        purchase_ti = bool(purchase.purchase_type_id and purchase.purchase_type.tax_inclusive)
+        purchase_acc = purchase.purchase_type.purchase_account if purchase.purchase_type_id else None
+        rcm_acc = (
+            purchase.purchase_type.rcm_payable_account
+            if purchase.purchase_type_id and purchase.is_reverse_charge
+            else None
+        )
+        if rcm_acc and totals["tax_amount"]:
+            party_amount = money(totals["net_amount"] - totals["tax_amount"])
+            post(purchase.account_id, purchase.date, "Purchase", purchase.invoice_no, purchase.narration, 0, party_amount, voucher=purchase)
+            post(rcm_acc.id, purchase.date, "Purchase (RCM payable)", purchase.invoice_no, purchase.narration, 0, totals["tax_amount"], voucher=purchase)
+        else:
+            post(purchase.account_id, purchase.date, "Purchase", purchase.invoice_no, purchase.narration, 0, totals["net_amount"], voucher=purchase)
+        for line in purchase.items.all():
+            line_acc = line.item.purchase_account if (line.item_id and line.item.purchase_account_id) else purchase_acc
+            if line_acc and line_acc.id in wanted:
+                line_amt = compute_line_amounts(line, tax_inclusive=purchase_ti)
+                post(line_acc.id, purchase.date, "Purchase", purchase.invoice_no, purchase.narration, line_amt["amount_after_discount"], 0, voucher=purchase)
+        if purchase.purchase_type_id and totals["tax_amount"]:
+            for tax_acc, tax_amt in purchase.purchase_type.tax_postings(totals["tax_amount"]):
+                if tax_acc:
+                    post(tax_acc.id, purchase.date, "Purchase", purchase.invoice_no, purchase.narration, tax_amt, 0, voucher=purchase)
+        for line, signed in zip(purchase.bill_sundries.all(), totals["sundry_signed_amounts"]):
+            acc = line.bill_sundry.posting_account_purchase or purchase_acc
+            if not acc:
+                continue
+            if signed >= 0:
+                post(acc.id, purchase.date, "Purchase", purchase.invoice_no, purchase.narration, signed, 0, voucher=purchase)
+            else:
+                post(acc.id, purchase.date, "Purchase", purchase.invoice_no, purchase.narration, 0, -signed, voucher=purchase)
+
+    sale_returns = SaleReturn.objects.select_related(
+        "account", "sale_type", "sale_type__sales_account", "sale_type__sales_return_account",
+        "sale_type__tax_account", "sale_type__tax_account_2",
+    ).prefetch_related(
+        Prefetch("items", queryset=SaleReturnItem.objects.select_related("item", "item__sale_account")),
+        Prefetch(
+            "bill_sundries",
+            queryset=SaleReturnBillSundry.objects.select_related("bill_sundry", "bill_sundry__posting_account_sale"),
+        ),
+    )
+    for sr in sale_returns:
+        totals = sr.totals()
+        sr_ti = bool(sr.sale_type_id and sr.sale_type.tax_inclusive)
+        post(sr.account_id, sr.date, "Sale Return", sr.voucher_no, sr.narration, 0, totals["net_amount"], voucher=sr)
+        return_acc = sr.sale_type.effective_sales_return_account if sr.sale_type_id else None
+        for line in sr.items.all():
+            line_acc = line.item.sale_account if (line.item_id and line.item.sale_account_id) else return_acc
+            if line_acc and line_acc.id in wanted:
+                line_amt = compute_line_amounts(line, tax_inclusive=sr_ti)
+                post(line_acc.id, sr.date, "Sale Return", sr.voucher_no, sr.narration, line_amt["amount_after_discount"], 0, voucher=sr)
+        if sr.sale_type_id and totals["tax_amount"]:
+            for tax_acc, tax_amt in sr.sale_type.tax_postings(totals["tax_amount"]):
+                if tax_acc:
+                    post(tax_acc.id, sr.date, "Sale Return", sr.voucher_no, sr.narration, tax_amt, 0, voucher=sr)
+        for line, signed in zip(sr.bill_sundries.all(), totals["sundry_signed_amounts"]):
+            acc = line.bill_sundry.posting_account_sale or return_acc
+            if not acc:
+                continue
+            if signed >= 0:
+                post(acc.id, sr.date, "Sale Return", sr.voucher_no, sr.narration, signed, 0, voucher=sr)
+            else:
+                post(acc.id, sr.date, "Sale Return", sr.voucher_no, sr.narration, 0, -signed, voucher=sr)
+
+    purchase_returns = PurchaseReturn.objects.select_related(
+        "account", "purchase_type", "purchase_type__purchase_account", "purchase_type__purchase_return_account",
+        "purchase_type__tax_account", "purchase_type__tax_account_2",
+    ).prefetch_related(
+        Prefetch("items", queryset=PurchaseReturnItem.objects.select_related("item", "item__purchase_account")),
+        Prefetch(
+            "bill_sundries",
+            queryset=PurchaseReturnBillSundry.objects.select_related("bill_sundry", "bill_sundry__posting_account_purchase"),
+        ),
+    )
+    for pr in purchase_returns:
+        totals = pr.totals()
+        pr_ti = bool(pr.purchase_type_id and pr.purchase_type.tax_inclusive)
+        post(pr.account_id, pr.date, "Purchase Return", pr.voucher_no, pr.narration, totals["net_amount"], 0, voucher=pr)
+        return_acc = pr.purchase_type.effective_purchase_return_account if pr.purchase_type_id else None
+        for line in pr.items.all():
+            line_acc = line.item.purchase_account if (line.item_id and line.item.purchase_account_id) else return_acc
+            if line_acc and line_acc.id in wanted:
+                line_amt = compute_line_amounts(line, tax_inclusive=pr_ti)
+                post(line_acc.id, pr.date, "Purchase Return", pr.voucher_no, pr.narration, 0, line_amt["amount_after_discount"], voucher=pr)
+        if pr.purchase_type_id and totals["tax_amount"]:
+            for tax_acc, tax_amt in pr.purchase_type.tax_postings(totals["tax_amount"]):
+                if tax_acc:
+                    post(tax_acc.id, pr.date, "Purchase Return", pr.voucher_no, pr.narration, 0, tax_amt, voucher=pr)
+        for line, signed in zip(pr.bill_sundries.all(), totals["sundry_signed_amounts"]):
+            acc = line.bill_sundry.posting_account_purchase or return_acc
+            if not acc:
+                continue
+            if signed >= 0:
+                post(acc.id, pr.date, "Purchase Return", pr.voucher_no, pr.narration, 0, signed, voucher=pr)
+            else:
+                post(acc.id, pr.date, "Purchase Return", pr.voucher_no, pr.narration, -signed, 0, voucher=pr)
+
+    for cn in CreditNote.objects.select_related("account").prefetch_related("lines__account"):
+        post(cn.account_id, cn.date, "Credit Note", cn.voucher_no, cn.narration, 0, cn.total_amount, voucher=cn)
+        for line in cn.lines.all():
+            post(line.account_id, cn.date, "Credit Note", cn.voucher_no, cn.narration, line.amount, 0, voucher=cn)
+
+    for dn in DebitNote.objects.select_related("account").prefetch_related("lines__account"):
+        post(dn.account_id, dn.date, "Debit Note", dn.voucher_no, dn.narration, dn.total_amount, 0, voucher=dn)
+        for line in dn.lines.all():
+            post(line.account_id, dn.date, "Debit Note", dn.voucher_no, dn.narration, 0, line.amount, voucher=dn)
+
+    for pmt in Payment.objects.select_related("through").prefetch_related("lines__account"):
+        for line in pmt.lines.all():
+            post(line.account_id, pmt.date, "Payment", pmt.voucher_no, pmt.narration, line.amount, 0, voucher=pmt)
+        post(pmt.through_id, pmt.date, "Payment", pmt.voucher_no, pmt.narration, 0, pmt.total_amount, voucher=pmt)
+
+    for rec in Receipt.objects.select_related("through").prefetch_related("lines__account"):
+        post(rec.through_id, rec.date, "Receipt", rec.voucher_no, rec.narration, rec.total_amount, 0, voucher=rec)
+        for line in rec.lines.all():
+            post(line.account_id, rec.date, "Receipt", rec.voucher_no, rec.narration, 0, line.amount, voucher=rec)
+
+    for jv in Journal.objects.prefetch_related("lines"):
+        for line in jv.lines.all():
+            post(line.account_id, jv.date, "Journal", jv.voucher_no, line.remarks or jv.narration, line.debit, line.credit, voucher=jv)
+
+    for entries in by.values():
+        entries.sort(key=lambda e: (e["date"], e["vtype"], e["voucher_no"]))
+    return by
+
+
 def account_ledger(account, date_from, date_to):
     opening = money(account.opening)
     opening_dr = opening if account.opening_type == Account.OpeningType.DR else ZERO
@@ -2667,21 +2854,32 @@ def outstanding_report(as_on, account_id=None, sides="RP"):
             "oldest_days": None,
         }
         if side == "R" and bal > 0:
-            if "R" in sides:
-                item["buckets"], item["oldest_days"] = _fifo_ageing(acc, as_on, 1)
-            else:
-                item["buckets"] = [ZERO] * 4
             receivable.append(item)
         elif side == "P" and bal < 0:
-            if "P" in sides:
-                item["buckets"], item["oldest_days"] = _fifo_ageing(acc, as_on, -1)
-            else:
-                item["buckets"] = [ZERO] * 4
             payable.append(item)
         elif side == "R":
             rec_adv.append(item)   # debtor with a credit balance
         else:
             pay_adv.append(item)   # creditor with a debit balance
+
+    # Ageing needs each party's transactions: read all vouchers ONCE for every
+    # party that needs it (not once per party).
+    need = [(it, 1) for it in receivable if "R" in sides] + [(it, -1) for it in payable if "P" in sides]
+    entries_map = _voucher_entries_by_accounts({it["account"].id for it, _ in need}) if need else {}
+    for it, sign in need:
+        bills = _fifo_open_bills(it["account"], as_on, sign, entries=entries_map.get(it["account"].id, []))
+        buckets = [ZERO] * 4
+        for b in bills:
+            b["bucket"] = _age_bucket(b["days"])
+            buckets[b["bucket"]] += b["pending"]
+        it["bills"] = bills
+        it["buckets"] = [money(x) for x in buckets]
+        ages = [b["days"] for b in bills if b["days"] is not None]
+        it["oldest_days"] = max(ages) if ages else None
+    for it in receivable + payable:
+        if it["buckets"] is None:
+            it["buckets"] = [ZERO] * 4
+            it["bills"] = []
 
     for lst in (receivable, payable, rec_adv, pay_adv):
         lst.sort(key=lambda r: r["amount"], reverse=True)
@@ -2910,7 +3108,20 @@ def missing_vouchers_report(selected_voucher_type=None):
 # BILLS RECEIVABLE / PAYABLE (open bill-by-bill list)
 # =========================================================
 
-def _fifo_open_bills(account, as_on, sign):
+def _age_bucket(days):
+    """0: up to 30 days, 1: 31-60, 2: 61-90, 3: over 90 (or opening balance)."""
+    if days is None:
+        return 3
+    if days <= 30:
+        return 0
+    if days <= 60:
+        return 1
+    if days <= 90:
+        return 2
+    return 3
+
+
+def _fifo_open_bills(account, as_on, sign, entries=None):
     """Like _fifo_ageing, but returns the individual unsettled bills.
 
     Receipts/payments are matched against the oldest bills first (the ERP has
@@ -2918,7 +3129,9 @@ def _fifo_open_bills(account, as_on, sign):
     reference, original amount and the amount still pending.
     """
     events = [(None, "Opening Balance", "", money(account.opening_signed()) * sign, None)]
-    for e in _voucher_entries_for_account(account):
+    if entries is None:
+        entries = _voucher_entries_for_account(account)
+    for e in entries:
         if e["date"] > as_on:
             continue
         events.append((e["date"], e["vtype"], e["voucher_no"], (e["debit"] - e["credit"]) * sign, e.get("voucher_url")))
@@ -2960,11 +3173,12 @@ def _fifo_open_bills(account, as_on, sign):
 
 
 def bills_outstanding_report(as_on, side, account_id=None):
-    """Open (unsettled) bills of customers (side='R') or suppliers (side='P')."""
+    """Open (unsettled) bills of customers (side='R') or suppliers (side='P'),
+    grouped party by party."""
     sign = 1 if side == "R" else -1
     rows = build_ledgers(_OUTSTANDING_SINCE, as_on)
     group_map = {g.id: (g.name, g.under_group_id) for g in AccountGroup.objects.all()}
-    bills, party_choices = [], []
+    wanted, party_choices = [], []
     for row in rows:
         acc = row["account"]
         if _party_side(group_map, acc.account_group_id) != side:
@@ -2975,14 +3189,29 @@ def bills_outstanding_report(as_on, side, account_id=None):
         bal = row["balance"]
         if bal == 0 or (bal > 0) != (side == "R"):
             continue
-        for b in _fifo_open_bills(acc, as_on, sign):
-            bills.append({**b, "account": acc, "party_name": acc.account_name})
-    bills.sort(key=lambda b: (b["party_name"].lower(), b["date"] or date.min))
+        wanted.append(acc)
+
+    entries_map = _voucher_entries_by_accounts({a.id for a in wanted}) if wanted else {}
+    wanted.sort(key=lambda a: a.account_name.lower())
+    groups = []
+    for acc in wanted:
+        bills = _fifo_open_bills(acc, as_on, sign, entries=entries_map.get(acc.id, []))
+        if not bills:
+            continue
+        groups.append({
+            "account": acc,
+            "party_name": acc.account_name,
+            "mobile": acc.mobile_no,
+            "bills": bills,
+            "total_bill": money(sum((b["bill_amount"] for b in bills), ZERO)),
+            "total_pending": money(sum((b["pending"] for b in bills), ZERO)),
+        })
     return {
         "as_on": as_on,
         "side": side,
-        "bills": bills,
-        "total_pending": money(sum((b["pending"] for b in bills), ZERO)),
-        "party_count": len({b["account"].id for b in bills}),
+        "groups": groups,
+        "bill_count": sum(len(g["bills"]) for g in groups),
+        "total_pending": money(sum((g["total_pending"] for g in groups), ZERO)),
+        "party_count": len(groups),
         "party_choices": party_choices,
     }
