@@ -79,16 +79,22 @@
     function renderPop(initial) {
         var all = filterOptions(st.opts, st.search.value);
         var LIMIT = 300;
-        st.filtered = all.slice(0, LIMIT);
+        var start = 0;
         if (initial) {
+            // Open on the value the field already has. If that value is further
+            // down than the first LIMIT entries (big item / party lists), start the
+            // window at it - otherwise nothing is highlighted, the "none" row is
+            // the default pick, and pressing Enter would wipe the saved value.
             var cur = st.sel.value, idx = 0;
-            for (var k = 0; k < st.filtered.length; k++) {
-                if (st.filtered[k].value === cur) { idx = k; break; }
+            for (var k = 0; k < all.length; k++) {
+                if (all[k].value === cur) { idx = k; break; }
             }
-            st.hi = idx;
+            if (idx >= LIMIT) { start = Math.max(0, Math.min(idx - 5, all.length - LIMIT)); }
+            st.hi = idx - start;
         } else {
             st.hi = 0;
         }
+        st.filtered = all.slice(start, start + LIMIT);
         var html = '';
         st.filtered.forEach(function (o, i) {
             var label = o.value === '' ? '\u2014 none \u2014' : esc(o.text);
@@ -98,8 +104,8 @@
         });
         if (!st.filtered.length) { html = '<div class="kbc-empty">No match</div>'; }
         st.list.innerHTML = html;
-        st.foot.textContent = all.length > LIMIT
-            ? (all.length - LIMIT) + ' more \u2014 keep typing to narrow'
+        st.foot.textContent = all.length > st.filtered.length
+            ? (all.length - st.filtered.length) + ' more \u2014 keep typing to narrow'
             : '\u2191\u2193 move \u00b7 Enter select \u00b7 Esc close';
         scrollToHi();
     }
