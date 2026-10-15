@@ -766,3 +766,26 @@ class VoucherSeriesAndMissingReportTestCase(TestCase):
         self.assertEqual((a.voucher_no, b.voucher_no), ("P/001/26", "P/002/26"))
         self.assertEqual(cfg.current_number, 2)
         self.assertEqual(res["changed"], 2)
+
+
+class LedgerPartySwitchTestCase(TestCase):
+    def setUp(self):
+        from masters.models import Account, AccountGroup
+        grp = AccountGroup.objects.create(name="LP Group", primary_group=True, nature=AccountGroup.Nature.ASSET)
+        self.a = Account.objects.create(account_name="LP Party A", account_group=grp)
+        self.b = Account.objects.create(account_name="LP Party B", account_group=grp)
+        user = get_user_model().objects.create_superuser("lpadmin", "a@a.com", "pw")
+        self.client = Client()
+        self.client.force_login(user)
+
+    def test_changing_party_on_open_ledger_opens_new_party(self):
+        # Ledger of A is open; the form then submits ?account=B to A's address.
+        url = reverse("admin:erp_ledger", args=[self.a.pk])
+        response = self.client.get(url, {"from": "2026-04-01", "to": "2026-05-31", "account": self.b.pk})
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("admin:erp_ledger", args=[self.b.pk]), response["Location"])
+
+    def test_same_party_does_not_redirect(self):
+        url = reverse("admin:erp_ledger", args=[self.a.pk])
+        response = self.client.get(url, {"from": "2026-04-01", "to": "2026-05-31", "account": self.a.pk})
+        self.assertEqual(response.status_code, 200)

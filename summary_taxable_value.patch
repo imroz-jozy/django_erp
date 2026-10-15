@@ -1,0 +1,69 @@
+diff -ruN a/masters/static/masters/js/sale_voucher.js b/masters/static/masters/js/sale_voucher.js
+--- a/masters/static/masters/js/sale_voucher.js	2026-10-14 09:07:58.861132801 +0000
++++ b/masters/static/masters/js/sale_voucher.js	2026-10-14 09:07:58.865252018 +0000
+@@ -317,7 +317,8 @@
+             var grandNet = running;
+ 
+             // Update Voucher Totals Summary Box (Desktop & Mobile)
+-            $('#v-sum-basic').text(fmtMoney(totalBasic));
++            // Taxable value: after item discounts and after any Multirate pre-tax discount
++            $('#v-sum-taxable').text(fmtMoney(totalTaxable));
+             $('#v-sum-disc').text(fmtMoney(totalDisc));
+             $('#v-sum-tax').text(fmtMoney(totalTax));
+             $('#v-sum-sundry').text(fmtMoney(totalSundry));
+diff -ruN a/masters/templates/admin/masters/purchase/change_form.html b/masters/templates/admin/masters/purchase/change_form.html
+--- a/masters/templates/admin/masters/purchase/change_form.html	2026-10-14 09:07:58.861545345 +0000
++++ b/masters/templates/admin/masters/purchase/change_form.html	2026-10-14 09:07:58.865688307 +0000
+@@ -283,8 +283,8 @@
+           <div class="totals-summary-card">
+             <div class="totals-summary-header">VOUCHER SUMMARY</div>
+             <div class="totals-row">
+-              <label>Basic Subtotal</label>
+-              <span class="val" id="v-sum-basic">₹ 0.00</span>
++              <label>Taxable Value</label>
++              <span class="val" id="v-sum-taxable">₹ 0.00</span>
+             </div>
+             <div class="totals-row">
+               <label>Discount Total</label>
+diff -ruN a/masters/templates/admin/masters/purchasereturn/change_form.html b/masters/templates/admin/masters/purchasereturn/change_form.html
+--- a/masters/templates/admin/masters/purchasereturn/change_form.html	2026-10-14 09:07:58.861585834 +0000
++++ b/masters/templates/admin/masters/purchasereturn/change_form.html	2026-10-14 09:07:58.865716529 +0000
+@@ -261,8 +261,8 @@
+           <div class="totals-summary-card">
+             <div class="totals-summary-header">VOUCHER SUMMARY</div>
+             <div class="totals-row">
+-              <label>Basic Subtotal</label>
+-              <span class="val" id="v-sum-basic">₹ 0.00</span>
++              <label>Taxable Value</label>
++              <span class="val" id="v-sum-taxable">₹ 0.00</span>
+             </div>
+             <div class="totals-row">
+               <label>Discount Total</label>
+diff -ruN a/masters/templates/admin/masters/sale/change_form.html b/masters/templates/admin/masters/sale/change_form.html
+--- a/masters/templates/admin/masters/sale/change_form.html	2026-10-14 09:07:58.861945347 +0000
++++ b/masters/templates/admin/masters/sale/change_form.html	2026-10-14 09:07:58.866068143 +0000
+@@ -286,8 +286,8 @@
+           <div class="totals-summary-card">
+             <div class="totals-summary-header">VOUCHER SUMMARY</div>
+             <div class="totals-row">
+-              <label>Basic Subtotal</label>
+-              <span class="val" id="v-sum-basic">₹ 0.00</span>
++              <label>Taxable Value</label>
++              <span class="val" id="v-sum-taxable">₹ 0.00</span>
+             </div>
+             <div class="totals-row">
+               <label>Discount Total</label>
+diff -ruN a/masters/templates/admin/masters/salereturn/change_form.html b/masters/templates/admin/masters/salereturn/change_form.html
+--- a/masters/templates/admin/masters/salereturn/change_form.html	2026-10-14 09:07:58.861993837 +0000
++++ b/masters/templates/admin/masters/salereturn/change_form.html	2026-10-14 09:07:58.866125969 +0000
+@@ -261,8 +261,8 @@
+           <div class="totals-summary-card">
+             <div class="totals-summary-header">VOUCHER SUMMARY</div>
+             <div class="totals-row">
+-              <label>Basic Subtotal</label>
+-              <span class="val" id="v-sum-basic">₹ 0.00</span>
++              <label>Taxable Value</label>
++              <span class="val" id="v-sum-taxable">₹ 0.00</span>
+             </div>
+             <div class="totals-row">
+               <label>Discount Total</label>

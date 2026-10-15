@@ -317,7 +317,8 @@
             var grandNet = running;
 
             // Update Voucher Totals Summary Box (Desktop & Mobile)
-            $('#v-sum-basic').text(fmtMoney(totalBasic));
+            // Taxable value: after item discounts and after any Multirate pre-tax discount
+            $('#v-sum-taxable').text(fmtMoney(totalTaxable));
             $('#v-sum-disc').text(fmtMoney(totalDisc));
             $('#v-sum-tax').text(fmtMoney(totalTax));
             $('#v-sum-sundry').text(fmtMoney(totalSundry));

@@ -507,13 +507,17 @@ def ledger_view(request, account_id=None):
 
     account_groups = AccountGroup.objects.all().order_by("name")
 
+    # The filter form submits to the CURRENT address. When a ledger is already
+    # open (/ledger/<id>/) the old party id is in the path, so a party picked in
+    # the dropdown (?account=NEW) must win over it, otherwise the previous
+    # party's ledger opens again.
+    picked = request.GET.get("account")
+    if picked and picked.isdigit() and (account_id is None or int(picked) != account_id):
+        return redirect(
+            f"{reverse('admin:erp_ledger', args=[int(picked)])}"
+            f"?from={date_from:%Y-%m-%d}&to={date_to:%Y-%m-%d}"
+        )
     if account_id is None:
-        account_id = request.GET.get("account")
-        if account_id:
-            return redirect(
-                f"{reverse('admin:erp_ledger', args=[account_id])}"
-                f"?from={date_from:%Y-%m-%d}&to={date_to:%Y-%m-%d}"
-            )
         return TemplateResponse(
             request,
             "admin/masters/report_ledger.html",
@@ -612,13 +616,15 @@ def item_stock_ledger_view(request, item_id=None):
     date_from, date_to = period_from_request(request)
     all_items = Item.objects.filter(item_type=Item.ItemType.GOODS).select_related("main_unit").order_by("item_name")
 
+    # Same as the account ledger: an item picked in the dropdown (?item=NEW)
+    # must win over the item id already in the address.
+    picked = request.GET.get("item")
+    if picked and picked.isdigit() and (item_id is None or int(picked) != item_id):
+        return redirect(
+            f"{reverse('admin:erp_item_stock_ledger', args=[int(picked)])}"
+            f"?from={date_from:%Y-%m-%d}&to={date_to:%Y-%m-%d}"
+        )
     if item_id is None:
-        item_id = request.GET.get("item")
-        if item_id:
-            return redirect(
-                f"{reverse('admin:erp_item_stock_ledger', args=[item_id])}"
-                f"?from={date_from:%Y-%m-%d}&to={date_to:%Y-%m-%d}"
-            )
         return TemplateResponse(
             request,
             "admin/masters/report_item_stock_ledger.html",
